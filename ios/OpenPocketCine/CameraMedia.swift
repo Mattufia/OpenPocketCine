@@ -20,6 +20,15 @@ enum MediaOperatorCopy {
 /// Playback-held media list + SoftAP HTTP cache. Owned by `CameraSession`.
 @MainActor
 final class CameraMedia {
+    private let fileManager: FileManager
+
+    private lazy var applicationSupport = fileManager.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask)[0]
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
     var assembler = MediaChunkAssembler()
     var browseTask: Task<Void, Never>?
     var resumeLiveTask: Task<Void, Never>?
@@ -104,9 +113,8 @@ final class CameraMedia {
         #if DEBUG && targetEnvironment(simulator)
             if MonitorMediaReview.isActive { return MonitorMediaReview.cacheRoot }
         #endif
-        let app = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[
-            0]
-        return app.appendingPathComponent("OpenPocketCine/media/\(cameraID)", isDirectory: true)
+        return applicationSupport.appendingPathComponent(
+            "OpenPocketCine/media/\(cameraID)", isDirectory: true)
     }
 
     func thumbnailCacheURL(cameraID: String, file: MediaFile) -> URL {
@@ -282,29 +290,144 @@ final class CameraMedia {
         return (try? JSONDecoder().decode([MediaFile].self, from: data)) ?? []
     }
 
-    func cacheByteCount(cameraID: String) -> UInt64 {
+    /// Snapshot disk state once per catalog/cache revision, away from SwiftUI body evaluation.
+    func cacheEntries(cameraID: String, files: [MediaFile]) async -> [String: MediaCacheEntry] {
         let root = cacheRoot(cameraID: cameraID)
-        guard
-            let enumerator = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey])
-        else { return 0 }
+        let manager = fileManager
+        let scan = Task.detached(priority: .utility) {
+            var entries: [String: MediaCacheEntry] = [:]
+            for file in files {
+                if Task.isCancelled { break }
+                let original = root.appendingPathComponent("files")
+                    .appendingPathComponent(Self.cacheName(file.path))
+                let attributes = try? manager.attributesOfItem(atPath: original.path)
+                let bytes = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+                let isFile = attributes?[.type] as? FileAttributeType == .typeRegular
+                let hasOriginal =
+                    isFile && bytes > 0
+                    && (file.sizeBytes == 0 || bytes >= file.sizeBytes * 9 / 10)
+                let hasProxy = MediaHTTP.proxyPaths(file).contains { path in
+                    let url = root.appendingPathComponent("play")
+                        .appendingPathComponent(MediaHTTP.playbackCacheFileName(path))
+                    return Self.existingFile(url, fileManager: manager) != nil
+                }
+                let thumb = root.appendingPathComponent("thumbs")
+                    .appendingPathComponent(Self.cacheName(file.thumbPath) + ".jpg")
+                entries[file.path] = MediaCacheEntry(
+                    grade: .resolve(hasOriginal: hasOriginal, hasProxy: hasProxy),
+                    originalURL: hasOriginal ? original : nil,
+                    thumbnailURL: Self.existingFile(thumb, fileManager: manager))
+            }
+            return entries
+        }
+        return await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+    }
+
+    func cacheByteCount(cameraID: String) async -> UInt64 {
+        let root = cacheRoot(cameraID: cameraID)
+        let manager = fileManager
+        let scan = Task.detached(priority: .utility) {
+            Self.cacheByteCount(at: root, fileManager: manager)
+        }
+        return await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+    }
+
+    private nonisolated static func retiredCaches(
+        at root: URL, fileManager: FileManager, includeUnprepared: Bool = false
+    ) -> [URL] {
+        let siblings =
+            (try? fileManager.contentsOfDirectory(
+                at: root.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
+        return siblings.filter {
+            $0.lastPathComponent.hasPrefix(".clearing-" + root.lastPathComponent + "-")
+                || (includeUnprepared
+                    && $0.lastPathComponent.hasPrefix(".retiring-" + root.lastPathComponent + "-"))
+        }
+    }
+
+    private nonisolated static func cacheByteCount(at root: URL, fileManager: FileManager) -> UInt64
+    {
         var total: UInt64 = 0
-        for case let url as URL in enumerator {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if values?.isDirectory == true { continue }
-            total += UInt64(values?.fileSize ?? 0)
+        // Failed deletions still occupy storage and must stay visible/retryable.
+        for directory in [root]
+            + retiredCaches(at: root, fileManager: fileManager, includeUnprepared: true)
+        {
+            guard
+                let enumerator = fileManager.enumerator(
+                    at: directory, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey])
+            else { continue }
+            for case let url as URL in enumerator {
+                if Task.isCancelled { return total }
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+                if values?.isDirectory == true { continue }
+                total += UInt64(max(0, values?.fileSize ?? 0))
+            }
         }
         return total
     }
 
-    func clearCache(cameraID: String, preservingCatalog: Bool) {
+    func clearCache(cameraID: String, preservingCatalog: Bool) async throws {
         pump.cancelAll()
         let root = cacheRoot(cameraID: cameraID)
-        let catalog = preservingCatalog ? loadCatalog(cameraID: cameraID) : []
-        try? FileManager.default.removeItem(at: root)
-        if preservingCatalog, !catalog.isEmpty {
-            persistCatalog(catalog, cameraID: cameraID)
+        if fileManager.fileExists(atPath: root.path) {
+            // Retire the directory before yielding. Recursive deletion must never
+            // target the live path, where a later download can create new files.
+            let suffix = root.lastPathComponent + "-" + UUID().uuidString
+            let retired = root.deletingLastPathComponent().appendingPathComponent(
+                ".retiring-" + suffix, isDirectory: true)
+            let ready = root.deletingLastPathComponent().appendingPathComponent(
+                ".clearing-" + suffix, isDirectory: true)
+            try fileManager.moveItem(at: root, to: retired)
+            var preserved: [String] = []
+            do {
+                if preservingCatalog {
+                    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+                    for name in ["index.json", "color.json"] {
+                        let source = retired.appendingPathComponent(name)
+                        if fileManager.fileExists(atPath: source.path) {
+                            try fileManager.moveItem(
+                                at: source, to: root.appendingPathComponent(name))
+                            preserved.append(name)
+                        }
+                    }
+                }
+                // Only a fully prepared tree is eligible for a deletion sweep.
+                // Another Clear may already be deleting its own retired files.
+                try fileManager.moveItem(at: retired, to: ready)
+            } catch {
+                // Restore metadata and the original directory if preparation
+                // fails. If rollback itself fails, keep both trees for inspection.
+                try? restoreRetiredCache(retired, to: root, preserved: preserved)
+                throw error
+            }
         }
+        let manager = fileManager
+        try await Task.detached(priority: .utility) {
+            for retired in Self.retiredCaches(at: root, fileManager: manager) {
+                try manager.removeItem(at: retired)
+            }
+        }.value
+    }
+
+    private func restoreRetiredCache(_ retired: URL, to root: URL, preserved: [String]) throws {
+        for name in preserved.reversed() {
+            try fileManager.moveItem(
+                at: root.appendingPathComponent(name), to: retired.appendingPathComponent(name))
+        }
+        if fileManager.fileExists(atPath: root.path) {
+            // Never recursively delete files a transfer may have created.
+            guard try fileManager.contentsOfDirectory(atPath: root.path).isEmpty else { return }
+            try fileManager.removeItem(at: root)
+        }
+        try fileManager.moveItem(at: retired, to: root)
     }
 
     func writeAtomically(_ data: Data, to dest: URL) throws {
@@ -319,12 +442,14 @@ final class CameraMedia {
         try FileManager.default.moveItem(at: tmp, to: dest)
     }
 
-    static func existingFile(_ url: URL) -> URL? {
+    nonisolated static func existingFile(
+        _ url: URL, fileManager: FileManager = .default
+    ) -> URL? {
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir),
             !isDir.boolValue
         else { return nil }
-        if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size]
+        if let size = try? fileManager.attributesOfItem(atPath: url.path)[.size]
             as? NSNumber,
             size.intValue <= 0
         {
@@ -337,9 +462,15 @@ final class CameraMedia {
         "opc.media.fav.\(cameraID)"
     }
 
-    private static func cacheName(_ path: String) -> String {
+    private nonisolated static func cacheName(_ path: String) -> String {
         path.replacingOccurrences(of: "/", with: "_")
     }
+}
+
+struct MediaCacheEntry: Sendable {
+    var grade: MediaCacheGrade
+    var originalURL: URL?
+    var thumbnailURL: URL?
 }
 
 enum MediaTransferError: Error {
@@ -637,6 +768,7 @@ extension CameraSession {
             let data = try await fetchMediaBytes(file: file, path: MediaHTTP.thumbnailPath(file))
             guard !data.isEmpty else { throw MediaTransferError.badResponse }
             try cameraMedia.writeAtomically(data, to: mediaThumbDest(file))
+            mediaCacheRevision &+= 1
         } catch {
             if mediaNote == nil {
                 mediaNote = MediaOperatorCopy.thumbFailed
@@ -679,6 +811,7 @@ extension CameraSession {
     /// Progress `1` is "done", not in-flight. Clear it so the library header does
     /// not sit on CACHING 100% forever.
     private func finishDownloadProgress(_ path: String) {
+        mediaCacheRevision &+= 1
         mediaDownloadProgress[path] = 1
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(450))
@@ -854,6 +987,7 @@ extension CameraSession {
             if path == file.path {
                 finishDownloadProgress(file.path)
             } else {
+                mediaCacheRevision &+= 1
                 mediaDownloadProgress[file.path] = nil
             }
             return dest
@@ -1151,7 +1285,9 @@ extension CameraSession {
     /// nil — keep the last id so cached clips stay findable offline.
     var mediaCameraID: String {
         if let id = connectedCamera?.id.uuidString {
-            UserDefaults.standard.set(id, forKey: Self.lastMediaCameraKey)
+            if UserDefaults.standard.string(forKey: Self.lastMediaCameraKey) != id {
+                UserDefaults.standard.set(id, forKey: Self.lastMediaCameraKey)
+            }
             return id
         }
         return UserDefaults.standard.string(forKey: Self.lastMediaCameraKey) ?? "unknown"

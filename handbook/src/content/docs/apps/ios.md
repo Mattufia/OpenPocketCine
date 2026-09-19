@@ -85,7 +85,16 @@ near the top or bottom of the gallery to autoscroll; lift your finger to stop.
 Selection circles appear only while selecting.
 
 Media retains favorites, cache state,
-playback assists and the existing delivery actions.
+playback assists and the existing delivery actions. Cached availability refreshes
+as files finish downloading. In Operator Setup → Storage, **Local Media Cache**
+shows **Checking…** while measuring stored files. **Clear Cache** keeps the clip
+list and recorded color information; **Clearing…** shows while old files are
+removed. A failed deletion stays included in the size so Clear can retry it.
+
+Playback assists wait for a ready clip with a valid playback position before
+requesting its first frame. Upscaler preparation runs separately from interface
+updates. Physical qualification of these build 111 follow-up fixes is still pending;
+report the time and action if playback or the interface freezes.
 
 On iPad, the interface reflows as you resize the app window. System window buttons
 stay clear of the monitor controls. Camera-connected use while resizing is still
