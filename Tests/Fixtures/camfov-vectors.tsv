@@ -28,6 +28,9 @@
 #   medTeleStops     lensMin lensMax   -> stops|-          `-` = Med-Tele off
 #   zoomStopsLens    name family res mode lensMin lensMax -> stops
 #   ceilingNote      size held stops   -> text             FORMAT-drop warning
+#   medTeleSwappable seen color rec mode -> 1|0            color/mode are decimal
+#   medTelePlan      target lensMin    -> swap/lens        on|off|- and lens|-
+#   zoomStopsSwap    name family res mode lensMin lensMax swap -> stops
 
 factorRaw	0	1.0000
 factorRaw	1000	12.0000
@@ -349,6 +352,28 @@ zoomStopsLens	Osmo Pocket 3	pocket	-1	1	434	868	2.0000,3.0000,4.0000
 zoomStopsLens	Osmo Pocket 4 Pro	pocket	0A	1	434	868	1.0000,3.0000,6.0000,12.0000
 zoomStopsLens	Osmo Pocket 4	pocket	0A	1	434	868	1.0000,2.0000,4.0000
 zoomStopsLens	Osmo Nano	nano	0A	1	434	868	1.0000
+medTeleSwappable	1	63	0	1	1
+medTeleSwappable	0	63	0	1	0
+medTeleSwappable	1	0	0	1	0
+medTeleSwappable	1	65	0	1	0
+medTeleSwappable	1	63	1	1	0
+medTeleSwappable	1	63	0	0	0
+medTeleSwappable	1	63	0	2	0
+medTeleSwappable	1	63	0	40	0
+medTelePlan	1.0000	434	off/-
+medTelePlan	2.0000	217	on/-
+medTelePlan	3.0000	217	on/651
+medTelePlan	4.0000	217	on/868
+medTelePlan	1.0000	217	-/217
+medTelePlan	2.0000	434	-/434
+medTelePlan	3.0000	434	-/651
+medTelePlan	4.0000	434	-/868
+zoomStopsSwap	Osmo Pocket 3	pocket	10	1	217	434	1	1.0000,2.0000,3.0000,4.0000
+zoomStopsSwap	Osmo Pocket 3	pocket	10	1	434	868	1	1.0000,2.0000,3.0000,4.0000
+zoomStopsSwap	Osmo Pocket 3	pocket	10	1	434	868	0	2.0000,3.0000,4.0000
+zoomStopsSwap	Osmo Pocket 3	pocket	10	1	217	434	0	1.0000,2.0000
+zoomStopsSwap	Osmo Pocket 4 Pro	pocket	10	1	217	434	1	1.0000,3.0000,6.0000,12.0000
+zoomStopsSwap	Osmo Nano	nano	10	1	217	434	1	1.0000
 stopWithinCycle	1.0000	2.0000,3.0000,4.0000	2.0000
 stopWithinCycle	2.0000	2.0000,3.0000,4.0000	2.0000
 stopWithinCycle	3.0000	2.0000,3.0000,4.0000	3.0000

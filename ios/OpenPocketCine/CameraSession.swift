@@ -402,13 +402,37 @@ final class CameraSession {
     var zoomStops: [Double] {
         connectedCamera?.model.activeZoomStops(
             resolution: status.videoResolution, shootingMode: status.shootingMode,
-            lensMin: status.zoomLensMin, lensMax: status.zoomLensMax)
+            lensMin: status.zoomLensMin, lensMax: status.zoomLensMax,
+            medTeleSwappable: medTeleSwappable)
             ?? CamFov.jumps
     }
-    var zoomMax: Double { zoomStops.last ?? 1 }
+    /// Whether a chip tap may take the Med-Tele lens off or put it back on.
+    var medTeleSwappable: Bool {
+        CamFov.medTeleSwappable(
+            seen: medTeleSeen, colorMode: status.colorMode,
+            isRecording: status.isRecording, shootingMode: status.shootingMode)
+    }
+    /// The dial's ends, which are the body's and not the chip's.
+    ///
+    /// A chip tap can move these — 1x and 2x swap the lens — but a pinch cannot:
+    /// it only ever crops inside whatever lens is on, and the body clamps a
+    /// spread past its window instead of refusing it. Once the swap is in the
+    /// cycle the two stop agreeing, because the cycle then describes both lenses
+    /// at once: at 4K with Med-Tele off it offers 4x that only the swap can
+    /// reach, and with Med-Tele on it offers a 1x the lens cannot. So while the
+    /// swap is available the dial follows `cam_lens_state` directly, and only
+    /// falls back to the cycle before the body has reported.
+    var zoomMax: Double { bodyZoomLimit(status.zoomLensMax) ?? (zoomStops.last ?? 1) }
     /// The widest the body will actually go. Med-Tele holds it above 1x, and an
     /// ask below it is clamped, not refused, so the UI has to stop there itself.
-    var zoomMin: Double { zoomStops.first ?? 1 }
+    /// See `zoomMax`.
+    var zoomMin: Double { bodyZoomLimit(status.zoomLensMin) ?? (zoomStops.first ?? 1) }
+    private func bodyZoomLimit(_ lens: UInt16?) -> Double? {
+        guard medTeleSwappable, let lens, let factor = CamFov.factor(lens: lens) else {
+            return nil
+        }
+        return CamFov.displayTenths(factor)
+    }
     /// Which of the cycle's stops are a real lens rather than a crop.
     ///
     /// A floor above 1x can only be a second lens the body has put in front of
@@ -418,6 +442,13 @@ final class CameraSession {
         let stops = zoomStops
         let base = stops.first ?? 1
         if base > 1.05 { return [1, base] }
+        if medTeleSwappable {
+            // The cycle's floor is 1x again, so it no longer says which lens is
+            // on: ask the body. 2x is the Med-Tele lens while it is wearing it and
+            // a crop when it is not, and this body has no optical 3x for the
+            // fallback below to find.
+            return CamFov.isMedTele(lensMin: status.zoomLensMin ?? CamFov.lens1x) ? [1, 2] : [1]
+        }
         return stops.contains(3) ? [1, 3] : [1]
     }
     /// Pinch HUD between `cam_fov` pushes. Nil when fingers are up.
@@ -476,6 +507,15 @@ final class CameraSession {
     @ObservationIgnored private var zoomColorHopUntil: Date?
     @ObservationIgnored private var zoomColorHopGeneration: UInt64 = 0
     @ObservationIgnored private var pendingZoomAfterHop: Double?
+    /// Whether this body has ever shown its second lens. Nothing announces
+    /// Med-Tele, so a floor above `CamFov.lens1x` is the only evidence it exists
+    /// — see `CamFov.medTeleSwappable`. Sticky on purpose: once the lens has been
+    /// seen, taking it off must not also take away the tap that puts it back.
+    private(set) var medTeleSeen = false
+    /// Target waiting on the swap to land before its lens SET — see
+    /// `CamFov.medTelePlan`.
+    @ObservationIgnored private var pendingZoomAfterSwap: Double?
+    @ObservationIgnored private var medTeleSwapAt: Date?
     @ObservationIgnored private var zoomStopTouched = false
 
     @ObservationIgnored private var zoomPinchAnchor = 1.0
@@ -765,6 +805,10 @@ final class CameraSession {
         zoomColorHopUntil = nil
         zoomColorHopGeneration += 1
         pendingZoomAfterHop = nil
+        // Evidence about the lens belongs to the body that showed it, not the app.
+        medTeleSeen = false
+        pendingZoomAfterSwap = nil
+        medTeleSwapAt = nil
         zoomStop = 1
         zoomStopTouched = false
         zoomPinchPreview = nil
@@ -1613,10 +1657,89 @@ final class CameraSession {
             pendingZoomAfterHop = factor
             return
         }
+        if medTeleSwappable {
+            let plan = CamFov.medTelePlan(
+                target: factor, lensMin: status.zoomLensMin ?? CamFov.lens1x)
+            if let on = plan.swapTo {
+                sendMedTeleSwap(
+                    on: on, target: factor, label: to, needsLensAfter: plan.lens != nil)
+                return
+            }
+        }
         zoomPin = CameraValuePin(factor, now: Date.timeIntervalSinceReferenceDate)
         markZoomStop(factor)
         controlNote = "Zoom \(to)"
         fireZoom(write, target: factor, announce: true)
+    }
+
+    /// Send the Med-Tele lens swap for a chip tap, and queue the zoom behind it
+    /// if the target is past where the body parks.
+    ///
+    /// The queue is not politeness: a lens SET that overtakes the swap is clamped
+    /// to the *old* window, so asking for 868 at 4K before the swap lands puts the
+    /// lens at 434 and the operator two stops short. `pendingZoomAfterSwap` waits
+    /// for the body to report the new floor, which it does in well under a second.
+    ///
+    /// ActiveTrack survives the send but the subject does not — measured: the body
+    /// accepts the swap and silently orphans the track. Clear it here, the same way
+    /// a tap-to-focus does, so the box goes at the moment the operator caused it
+    /// rather than three seconds later when the idle poll notices.
+    private func sendMedTeleSwap(
+        on: Bool, target: Double, label: String, needsLensAfter: Bool
+    ) {
+        ControlLiveLog.line(
+            "zoom: Med-Tele \(on ? "on" : "off") for \(label) lensAfter=\(needsLensAfter)")
+        zoomPin = CameraValuePin(target, now: Date.timeIntervalSinceReferenceDate)
+        markZoomStop(target)
+        cancelTracking(sendClear: isTrackingActive)
+        medTeleSwapAt = Date()
+        pendingZoomAfterSwap = needsLensAfter ? target : nil
+        // A coalesced pinch write still waiting on its hold would land on the new
+        // lens carrying the old lens's number. It rides its own opcode, so the
+        // swap does not supersede it — drop it here.
+        inflightPending.removeValue(forKey: CameraSetMailbox.zoomOpcodeKey)
+        lastZoomSetAt = Date()
+        let name = on ? "Zoom \(label) — Tele" : "Zoom \(label) — wide lens"
+        let frame = Commands.setMedTele(on)
+        fireCamera(
+            frame, name: name, retransmits: true,
+            onSettle: { [weak self] ok in
+                guard let self else { return }
+                if ok { self.controlNote = name }
+                ControlLiveLog.line(
+                    "zoom: SET \(Duml.hex(frame.payload)) ack=\(ok ? "ok" : (self.controlNote ?? "failed"))"
+                )
+            })
+    }
+
+    /// Watch the reported floor for what Med-Tele never announces.
+    ///
+    /// Called on every absorbed status: a floor above `CamFov.lens1x` proves the
+    /// body owns a second lens, which is what earns the chip its 1x, and the same
+    /// reading is what releases a zoom queued behind a swap.
+    private func absorbMedTele() {
+        guard let lensMin = status.zoomLensMin else { return }
+        let medTele = CamFov.isMedTele(lensMin: lensMin)
+        if medTele, !medTeleSeen {
+            medTeleSeen = true
+            ControlLiveLog.line("zoom: Med-Tele seen — lens floor \(lensMin)")
+        }
+        guard let target = pendingZoomAfterSwap else { return }
+        guard medTele == (CamFov.displayTenths(target) > CamFov.minFactor + 0.05) else {
+            // Still the old lens. The swap is a silent refusal when it fails, so
+            // give it the measured second and then stop waiting rather than hold
+            // the zoom forever.
+            let waited = Date().timeIntervalSince(medTeleSwapAt ?? Date())
+            guard waited > CamFov.medTeleSwapTimeout else { return }
+            pendingZoomAfterSwap = nil
+            controlNote = "Med-Tele didn't switch"
+            ControlLiveLog.line("zoom: Med-Tele swap unconfirmed after \(waited)s")
+            return
+        }
+        pendingZoomAfterSwap = nil
+        guard let write = CamFov.chipWrite(forJump: target) else { return }
+        ControlLiveLog.line("zoom: swap landed — \(CamFov.displayLabel(factor: target))")
+        fireZoom(write, target: target, announce: false)
     }
 
     /// Pinch hybrid: `0A 4E` + unquantized lens. Coalesces to the newest tick.
@@ -5543,6 +5666,7 @@ final class CameraSession {
             }
         }
         status = s
+        absorbMedTele()
         confirmZoomColorHopIfReady()
         if flipReply || flipChanged {
             if flipChanged {

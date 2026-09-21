@@ -118,9 +118,15 @@ public struct CameraModel: Equatable, Sendable {
     /// A Pocket 3 wearing Med-Tele overrides the table: the body raises its own
     /// wide limit and clamps anything below it, so the cycle is the range the
     /// body reports (2x…4x) and never the 1x the lens cannot reach.
+    /// `medTeleSwappable` is `CamFov.medTeleSwappable` — the app can take the
+    /// second lens off as well as read it. Then 1x is back in the cycle whatever
+    /// the limits currently say, because the tap moves the limits rather than
+    /// obeying them, and the ceiling is Med-Tele's flat 4x rather than this
+    /// FORMAT's digital budget.
     public func activeZoomStops(
         resolution: VideoResolution?, shootingMode: Int,
-        lensMin: UInt16? = nil, lensMax: UInt16? = nil
+        lensMin: UInt16? = nil, lensMax: UInt16? = nil,
+        medTeleSwappable: Bool = false
     ) -> [Double] {
         let n = name.lowercased().replacingOccurrences(of: " ", with: "")
         let isPro = n.contains("pocket4p") || n.contains("4pro")
@@ -133,6 +139,10 @@ public struct CameraModel: Equatable, Sendable {
             }
         }()
         if isPro { return digitalLocked ? [1, 3] : [1, 3, 6, 12] }
+        // 1x is reachable again once the app can take the lens off, so the floor
+        // stops being a floor. Checked before the reported limits, which describe
+        // only the lens the body happens to be wearing right now.
+        if isPocket3, medTeleSwappable { return CamFov.swapStops }
         if isPocket3, let low = lensMin, let high = lensMax,
             let stops = CamFov.medTeleStops(lensMin: low, lensMax: high)
         {

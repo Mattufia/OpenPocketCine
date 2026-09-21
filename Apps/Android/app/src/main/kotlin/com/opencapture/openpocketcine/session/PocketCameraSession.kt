@@ -365,6 +365,17 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
     private var zoomColorHopUntilElapsed = 0L
     private var zoomColorHopGeneration = 0L
     private var pendingZoomAfterHop: Double? = null
+    /**
+     * Whether this body has ever shown its second lens. Nothing announces Med-Tele, so a
+     * floor above [CamFov.LENS_1X] is the only evidence it exists — see
+     * [CamFov.medTeleSwappable]. Sticky on purpose: once the lens has been seen, taking it
+     * off must not also take away the tap that puts it back.
+     */
+    @Volatile var medTeleSeen = false
+        private set
+    /** Target waiting on the swap to land before its lens SET — see [CamFov.medTelePlan]. */
+    private var pendingZoomAfterSwap: Double? = null
+    private var medTeleSwapAt = 0L
     private var zoomStop = 1.0
     private var zoomStopTouched = false
     var zoomPinchPreview: Double? = null
@@ -597,6 +608,9 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
         zoomColorHopUntilElapsed = 0L
         zoomColorHopGeneration += 1
         pendingZoomAfterHop = null
+        // Evidence about the lens belongs to the body that showed it, not to the app.
+        medTeleSeen = false
+        pendingZoomAfterSwap = null
         resetZoomHud()
         clearLocalTracking()
         clearFaceAF()
@@ -2329,6 +2343,7 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
             _status.value = next
             publishFaceDetectWanted()
         }
+        absorbMedTele()
         confirmZoomColorHopIfReady()
     }
 
@@ -2500,17 +2515,47 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
             status.shootingMode,
             status.zoomLensMin,
             status.zoomLensMax,
+            medTeleSwappable(),
         )
     }
 
-    fun zoomMax(): Double = zoomStops().lastOrNull() ?: 1.0
+    /** Whether a chip tap may take the Med-Tele lens off or put it back on. */
+    fun medTeleSwappable(): Boolean {
+        val status = _status.value
+        return CamFov.medTeleSwappable(
+            medTeleSeen,
+            status.colorMode,
+            status.isRecording,
+            status.shootingMode,
+        )
+    }
+
+    /**
+     * The dial's ends, which are the body's and not the chip's.
+     *
+     * A chip tap can move these — 1× and 2× swap the lens — but a pinch cannot: it only
+     * ever crops inside whatever lens is on, and the body clamps a spread past its window
+     * instead of refusing it. Once the swap is in the cycle the two stop agreeing, because
+     * the cycle then describes both lenses at once: at 4K with Med-Tele off it offers 4×
+     * that only the swap can reach, and with Med-Tele on it offers a 1× the lens cannot.
+     * So while the swap is available the dial follows `cam_lens_state` directly, and only
+     * falls back to the cycle before the body has reported.
+     */
+    fun zoomMax(): Double = bodyZoomLimit(_status.value.zoomLensMax)
+        ?: zoomStops().lastOrNull() ?: 1.0
 
     /**
      * The widest the body will actually go. Normally 1×, but Pocket 3 Med-Tele parks a
      * 40 mm lens in front and clamps anything wider back to it, so the dial must not
-     * offer travel the camera will refuse to honour.
+     * offer travel the camera will refuse to honour. See [zoomMax].
      */
-    fun zoomMin(): Double = zoomStops().firstOrNull() ?: 1.0
+    fun zoomMin(): Double = bodyZoomLimit(_status.value.zoomLensMin)
+        ?: zoomStops().firstOrNull() ?: 1.0
+
+    private fun bodyZoomLimit(lens: Int): Double? {
+        if (!medTeleSwappable() || lens < 0) return null
+        return CamFov.factorFromLens(lens)?.let { CamFov.displayTenths(it) }
+    }
 
     /**
      * The stops that are optics rather than a crop of them, for the caption and the
@@ -2524,6 +2569,13 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
         val stops = zoomStops()
         val base = stops.firstOrNull() ?: 1.0
         if (base > 1.05) return listOf(1.0, base)
+        if (medTeleSwappable()) {
+            // The cycle's floor is 1× again, so it no longer says which lens is on: ask the
+            // body. 2× is the Med-Tele lens while it is wearing it and a crop when it is
+            // not, and this body has no optical 3× for the fallback below to find.
+            return if (CamFov.isMedTele(_status.value.zoomLensMin)) listOf(1.0, 2.0)
+            else listOf(1.0)
+        }
         return if (3.0 in stops) listOf(1.0, 3.0) else listOf(1.0)
     }
 
@@ -2550,6 +2602,13 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
             pendingZoomAfterHop = factor
             return
         }
+        if (medTeleSwappable()) {
+            val plan = CamFov.medTelePlan(factor, _status.value.zoomLensMin)
+            if (plan.swapTo != null) {
+                sendMedTeleSwap(plan.swapTo, factor, to, needsLensAfter = plan.lens != null)
+                return
+            }
+        }
         zoomPin =
             CameraValuePin(factor, SystemClock.elapsedRealtime() + CameraValuePin.SETTLE_MS)
         markZoomStop(factor)
@@ -2562,6 +2621,86 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
                 fireZoom(CameraCommands.zoomSlew(write.value), announce = true, name = name)
         }
         refreshZoomHud()
+    }
+
+    /**
+     * Send the Med-Tele lens swap for a chip tap, and queue the zoom behind it if the
+     * target is past where the body parks.
+     *
+     * The queue is not politeness: a lens SET that overtakes the swap is clamped to the
+     * *old* window, so asking for 868 at 4K before the swap lands puts the lens at 434 and
+     * the operator two stops short. [pendingZoomAfterSwap] waits for the body to report
+     * the new floor, which it does in well under a second.
+     *
+     * ActiveTrack survives the send but the subject does not — measured: the body accepts
+     * the swap and silently orphans the track. Clear it here, the same way a tap-to-focus
+     * does, so the box goes at the moment the operator caused it rather than three seconds
+     * later when the idle poll notices.
+     */
+    private fun sendMedTeleSwap(
+        on: Boolean,
+        target: Double,
+        label: String,
+        needsLensAfter: Boolean,
+    ) {
+        val dl = datalink
+        if (dl == null) {
+            _controlNote.value = "Zoom not available"
+            return
+        }
+        Log.i(TAG, "zoom: Med-Tele ${if (on) "on" else "off"} for $label lensAfter=$needsLensAfter")
+        zoomPin =
+            CameraValuePin(target, SystemClock.elapsedRealtime() + CameraValuePin.SETTLE_MS)
+        markZoomStop(target)
+        cancelTracking(sendClear = isTrackingActive)
+        medTeleSwapAt = SystemClock.elapsedRealtime()
+        pendingZoomAfterSwap = if (needsLensAfter) target else null
+        // A coalesced slider write still in flight would land on the old lens.
+        pendingZoomPayload = null
+        zoomFlushJob?.cancel()
+        zoomFlushJob = null
+        dl.sendDuml(0x02, CameraCommands.CMD_MED_TELE, CameraCommands.medTele(on))
+        lastZoomWireAt = SystemClock.elapsedRealtime()
+        _controlNote.value = if (on) "Zoom $label — Tele" else "Zoom $label — wide lens"
+        refreshZoomHud()
+    }
+
+    /**
+     * Watch the reported floor for what Med-Tele never announces.
+     *
+     * Called on every absorbed status: a floor above [CamFov.LENS_1X] proves the body owns
+     * a second lens, which is what earns the chip its 1×, and the same reading is what
+     * releases a zoom queued behind a swap.
+     */
+    private fun absorbMedTele() {
+        val lensMin = _status.value.zoomLensMin
+        if (lensMin < 0) return
+        val medTele = CamFov.isMedTele(lensMin)
+        if (medTele && !medTeleSeen) {
+            medTeleSeen = true
+            Log.i(TAG, "zoom: Med-Tele seen — lens floor $lensMin")
+        }
+        val target = pendingZoomAfterSwap ?: return
+        if (medTele != (CamFov.displayTenths(target) > CamFov.MIN_FACTOR + 0.05)) {
+            // Still the old lens. The swap is a silent refusal when it fails, so give it
+            // the measured second and then stop waiting rather than hold the zoom forever.
+            if (SystemClock.elapsedRealtime() - medTeleSwapAt <= CamFov.MED_TELE_SWAP_TIMEOUT_MS) return
+            pendingZoomAfterSwap = null
+            _controlNote.value = "Med-Tele didn't switch"
+            Log.i(
+                TAG,
+                "zoom: Med-Tele swap unconfirmed after ${CamFov.MED_TELE_SWAP_TIMEOUT_MS} ms",
+            )
+            return
+        }
+        pendingZoomAfterSwap = null
+        val write = CamFov.chipWrite(target) as? CamFov.ChipWrite.Lens ?: return
+        Log.i(TAG, "zoom: swap landed — lens ${write.position} for ${CamFov.displayLabel(target)}")
+        fireZoom(
+            CameraCommands.zoomLens(write.position),
+            announce = false,
+            name = "Zoom ${CamFov.displayLabel(target)}",
+        )
     }
 
     fun setZoomSlider(factor: Double) {

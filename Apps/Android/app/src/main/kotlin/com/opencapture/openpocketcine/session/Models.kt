@@ -46,12 +46,18 @@ data class CameraModel(
      * Pocket 3 Med-Tele the range is a fixed 2×…4× in every FORMAT, so the table's 4K entry
      * would otherwise cap the cycle at what is really the floor. `-1` means not reported
      * yet and keeps the table.
+     *
+     * [medTeleSwappable] is [CamFov.medTeleSwappable] — the app can take the second lens
+     * off as well as read it. Then 1× is back in the cycle whatever the limits currently
+     * say, because the tap moves the limits rather than obeying them, and the ceiling is
+     * Med-Tele's flat 4× rather than this FORMAT's digital budget.
      */
     fun activeZoomStops(
         resolutionCode: Int = -1,
         shootingMode: Int = -1,
         lensMin: Int = -1,
         lensMax: Int = -1,
+        medTeleSwappable: Boolean = false,
     ): List<Double> {
         val n = name.lowercase().replace(" ", "")
         val isPro = n.contains("pocket4p") || n.contains("4pro")
@@ -63,9 +69,13 @@ data class CameraModel(
                 shootingMode == CameraCommands.SHOOT_SUPER_NIGHT
         if (isPro) return if (digitalLocked) listOf(1.0, 3.0) else listOf(1.0, 3.0, 6.0, 12.0)
         if (isPocket3) {
-            // The raised floor is the body's word and holds whatever else is going on:
-            // with digital zoom locked the cycle is the optical base alone, which under
-            // Med-Tele is 2×, not the 1× the lens cannot reach.
+            // 1× is reachable again once the app can take the lens off, so the floor stops
+            // being a floor. Checked before the reported limits, which describe only the
+            // lens the body happens to be wearing right now.
+            if (medTeleSwappable) return CamFov.SWAP_STOPS
+            // Otherwise the raised floor is the body's word and holds whatever else is
+            // going on: with digital zoom locked the cycle is the optical base alone,
+            // which under Med-Tele is 2×, not the 1× the lens cannot reach.
             CamFov.medTeleStops(lensMin, lensMax)?.let { stops ->
                 return if (digitalLocked) stops.take(1) else stops
             }

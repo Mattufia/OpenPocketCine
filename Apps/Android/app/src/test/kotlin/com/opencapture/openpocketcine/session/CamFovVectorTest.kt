@@ -66,6 +66,9 @@ class CamFovVectorTest {
                 "medTeleStops",
                 "zoomStopsLens",
                 "ceilingNote",
+                "medTeleSwappable",
+                "medTelePlan",
+                "zoomStopsSwap",
             ),
             vectors.map { it[0] }.toSet(),
         )
@@ -155,6 +158,37 @@ class CamFovVectorTest {
                         CamFov.ceilingNote(row[1], row[2].toDouble(), list(row[3])) ?: "-",
                         where,
                     )
+                "medTeleSwappable" ->
+                    assertEquals(
+                        want == "1",
+                        CamFov.medTeleSwappable(
+                            row[1] == "1",
+                            row[2].toInt(),
+                            row[3] == "1",
+                            row[4].toInt(),
+                        ),
+                        where,
+                    )
+                "medTelePlan" -> {
+                    val plan = CamFov.medTelePlan(row[1].toDouble(), row[2].toInt())
+                    val swap = plan.swapTo?.let { if (it) "on" else "off" } ?: "-"
+                    val lens = plan.lens?.toString() ?: "-"
+                    assertEquals(want, "$swap/$lens", where)
+                }
+                "zoomStopsSwap" -> {
+                    val model = CameraModel(name = row[1], family = row[2])
+                    val got =
+                        model.activeZoomStops(
+                            resolution(row[3])?.rawValue ?: -1,
+                            row[4].toInt(),
+                            row[5].toInt(),
+                            row[6].toInt(),
+                            row[7] == "1",
+                        )
+                    val expected = list(want)
+                    assertEquals(expected.size, got.size, where)
+                    got.zip(expected).forEach { (a, b) -> assertTrue(close(a, b), where) }
+                }
                 else -> fail("unknown vector kind ${row[0]}")
             }
         }

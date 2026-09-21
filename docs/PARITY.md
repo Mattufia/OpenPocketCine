@@ -664,6 +664,60 @@ far-left stop and centred at 3.00×, confirming a 2…4 scale; the operator drov
 a drag end to end. Physical iOS verification remains pending: no iPhone is
 available to this project.
 
+### Pocket 3 Med-Tele in the chip cycle (2026-09-21)
+
+The range fix above gave Med-Tele an honest 2 / 3 / 4 cycle, but it left the
+operator having to leave the app to get back to the wide lens. The 1× the cycle
+dropped was unreachable only because the app could not take the lens off — and
+it can: the `0x02/0xFF` SET is
+[measured in both directions](../handbook/src/content/docs/devices/pocket-3/controls.md#driving-med-tele-from-the-app-2026-09-21).
+
+So the cycle is symmetric again — **1 → 2 → 3 → 4 → 1** — and the two ends mean
+the lens rather than a crop: 1× takes Med-Tele off, 2× puts it on. 3× and 4×
+are digital crops stacked on the 2× optical base, unchanged. `CamFov.swapStops`
+is that cycle; `CamFov.medTelePlan` decides, for a target and the reported
+floor, whether a swap is needed and which lens position (if any) has to follow
+it.
+
+The swap is offered only when all four hold — `CamFov.medTeleSwappable`:
+
+| Gate | Why |
+| --- | --- |
+| The body has shown a floor above 217 at least once | Nothing announces the lens; the raised floor is the only evidence it exists. Sticky: taking the lens off must not take away the tap that puts it back |
+| `colorMode == normal` | The body ignores the swap in D-Log M. On a Pocket 3 `parseColorMode` only ever yields normal or D-Log M — `COLOR_NORMAL10` is Nano-only — so one test covers the 8- and 10-bit pair |
+| Not recording | The body ignores the swap while recording |
+| Shooting mode is Video | SlowMo / TimeLapse / SuperNight were never probed, so the swap stays out of them rather than being assumed into them |
+
+Two consequences had to be handled rather than discovered later:
+
+- **The zoom waits for the lens.** A lens SET that overtakes the swap is clamped
+  to the *old* window. `pendingZoomAfterSwap` holds the 3× / 4× write until the
+  reported floor actually moves, with `CamFov.medTeleSwapTimeout` (2 s) behind
+  it because the refusals are silent — measured under 1 s in both directions.
+- **The dial stops reading the cycle.** Once the swap is in it, `zoomStops`
+  describes *both* lenses and can no longer bound a pinch, which only ever crops
+  inside the lens that is on. While the swap is available `zoomMin` / `zoomMax`
+  read `cam_lens_state` directly, and `zoomOpticalStops` asks the body which
+  lens it is wearing instead of reading the cycle's floor. No other camera's
+  behaviour changes: every one of these paths falls back to the cycle.
+
+ActiveTrack survives the send but its subject does not — the body accepts the
+swap and silently orphans the track — so both shells clear tracking on the swap,
+the way a tap-to-focus does, rather than letting the idle poll notice seconds
+later.
+
+Cross-language vectors: `medTeleSwappable`, `medTelePlan` and `zoomStopsSwap`
+in `Tests/Fixtures/camfov-vectors.tsv`, including Pocket 4 Pro and Nano rows
+that prove the flag cannot reach another body's cycle.
+
+The session wiring itself has no unit test on either side: no Android harness
+constructs a `PocketCameraSession`. The shared fixture covers the pure logic in
+both languages; the wiring is covered by the physical run.
+
+Verification: core and shell unit tests both sides. **Physical Android is
+pending** — this section is not done until the cycle is driven on the Pocket 3.
+Physical iOS remains pending as before: no iPhone is available to this project.
+
 ### Zoom chip pin expiry (2026-09-18)
 
 The survey left the chip latched: `zoomOptimistic` — the asked-for factor the

@@ -2239,6 +2239,8 @@ public enum CamFov {
     public static let rawWide: UInt32 = rawAt12x
     /// `@14` at operator 1×. SET `0A 4E D9 00`.
     public static let lens1x: UInt16 = 217
+    /// Where a Pocket 3 parks when Med-Tele comes on — its 2x lens, measured.
+    public static let lensMedTele: UInt16 = 434
     /// `@14` at operator 3× (sensor hop / Mimo 3× chip).
     public static let lens3x: UInt16 = 651
     /// `@14` at operator 6× (lerp 3×→12×). Pocket 4 Pro detent.
@@ -2324,10 +2326,13 @@ public enum CamFov {
     /// The chip cycle while Med-Tele holds the floor up: whole factors from the
     /// body's own floor to its own ceiling, which is 2x…4x on a Pocket 3.
     ///
-    /// 1x is deliberately absent. It is unreachable — the camera clamps a wider
-    /// ask back to the floor — so offering it would spend a tap to go nowhere.
-    /// Nil when Med-Tele is off or the body has not reported its limits yet, and
-    /// the caller keeps the per-FORMAT table.
+    /// 1x is deliberately absent, because a *zoom* cannot reach it: the camera
+    /// clamps a wider ask back to the floor, so the tap would go nowhere. That
+    /// holds only while the app is stuck with the lens the body is wearing — when
+    /// it may take Med-Tele off the caller reaches for ``swapStops`` instead and
+    /// never gets here, which is why this is checked second. Nil when Med-Tele is
+    /// off or the body has not reported its limits yet, and the caller keeps the
+    /// per-FORMAT table.
     public static func medTeleStops(lensMin: UInt16, lensMax: UInt16) -> [Double]? {
         guard isMedTele(lensMin: lensMin),
             let low = factor(lens: lensMin),
@@ -2337,6 +2342,88 @@ public enum CamFov {
         let last = Int((high + 0.05).rounded(.down))
         guard last >= first else { return [displayTenths(low)] }
         return (first...last).map(Double.init)
+    }
+
+    /// How long to wait for a Med-Tele swap to show up in the reported floor
+    /// before giving up on the zoom queued behind it.
+    ///
+    /// Measured under 1 s in both directions over many runs; this is that with
+    /// room, not a guess. It has to exist at all because the refusals are silent
+    /// — no movement and no NACK — so without a deadline a swap the body ignored
+    /// would strand the zoom forever.
+    public static let medTeleSwapTimeout: TimeInterval = 2
+
+    /// Whether a chip tap may swap the lens itself, instead of only cropping
+    /// what the body has already chosen.
+    ///
+    /// `seen` is the only honest evidence the body owns a second lens: nothing
+    /// announces the feature — no `camcap_*` key, and `0x02/0x80` `@57` never
+    /// moves — so the caller flips it true the first time this session the
+    /// reported floor rises above `lens1x`. Before that, offering the swap would
+    /// be a guess about the hardware.
+    ///
+    /// The other three are the states where the swap was measured not to work,
+    /// each a *silent* refusal — the body neither moves nor NACKs — so offering
+    /// it there would spend a tap on nothing:
+    /// - colour must be Normal; in D-Log M the SET was ignored for 4 s. (A
+    ///   Pocket 3 only ever reports `.normal` or `.dLogM` for the 8/10-bit pair,
+    ///   so this one case covers both.)
+    /// - not while recording; mid-take the SET was ignored for 4 s with the link
+    ///   healthy, and the identical command landed in under 1 s once REC stopped.
+    /// - video only. SlowMo / TimeLapse / SuperNight were never probed, and an
+    ///   unmeasured yes is how the inert 1x got shipped the first time. Lifting
+    ///   this needs one run, not an argument.
+    ///
+    /// ActiveTrack is deliberately *not* here. The swap works with a track
+    /// running — it is the subject that does not survive it — so the caller
+    /// clears tracking itself rather than hiding a stop the body would honour.
+    public static func medTeleSwappable(
+        seen: Bool, colorMode: ColorMode?, isRecording: Bool, shootingMode: Int
+    ) -> Bool {
+        seen && colorMode == .normal && !isRecording
+            && ShootingMode(rawValue: UInt8(truncatingIfNeeded: shootingMode)) == .video
+    }
+
+    /// The chip cycle once 1x means "take the second lens off" rather than
+    /// "crop wider".
+    ///
+    /// Whole stops 1…4 in every FORMAT, because the reach no longer comes from
+    /// the FORMAT's digital budget: 3x and 4x are the Med-Tele 2x with 1.5x and
+    /// 2x of crop on top, and the body's ceiling under Med-Tele is a flat 868
+    /// however it is shooting. A FORMAT that caps digital zoom at 2x therefore
+    /// still reaches 4x here.
+    public static let swapStops: [Double] = [1, 2, 3, 4]
+
+    /// What a chip tap on a `swapStops` target has to put on the wire.
+    ///
+    /// `swapTo` is nil when the body already wears the right lens and this is an
+    /// ordinary zoom. `lens` is nil when the swap alone lands the operator on the
+    /// target: the body parks exactly on the new floor each way — 217 coming out,
+    /// 434 going in — so a bare 1x or 2x needs no zoom SET behind it, which is
+    /// also what makes those two taps fast.
+    public struct MedTelePlan: Equatable, Sendable {
+        public let swapTo: Bool?
+        public let lens: UInt16?
+        public init(swapTo: Bool?, lens: UInt16?) {
+            self.swapTo = swapTo
+            self.lens = lens
+        }
+    }
+
+    /// Read `MedTelePlan` off the target and the body's reported floor.
+    ///
+    /// Anything above 1x wants the second lens, because 2x *is* the lens and
+    /// 3x/4x are crops of it. Order matters for the caller: a lens SET that
+    /// overtakes the swap is clamped to the old window — 868 would land as 434 at
+    /// 4K — so `lens` must wait until the body reports the new floor, not merely
+    /// until the swap is ACKed.
+    public static func medTelePlan(target: Double, lensMin: UInt16) -> MedTelePlan {
+        let want = displayTenths(target) > minFactor + 0.05
+        let lens = lensPosition(for: target)
+        if want == isMedTele(lensMin: lensMin) { return MedTelePlan(swapTo: nil, lens: lens) }
+        let park = want ? lensMedTele : lens1x
+        let needsLens = abs(Int(lens) - Int(park)) > 1
+        return MedTelePlan(swapTo: want, lens: needsLens ? lens : nil)
     }
 
     /// Operator factor from `cam_fov` `@0`. Inverted vs `@0 / 1024`.

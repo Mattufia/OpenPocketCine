@@ -106,6 +106,40 @@ top, which is what the operator sees. Only the offered *stops* were wrong: the
 per-FORMAT ceiling (434 at 4K) equals the Med-Tele floor, which left no control
 at all while the real range was 2×…4×.
 
+### Driving Med-Tele from the app (2026-09-21)
+
+The candidate mapping above was replayed as a **SET the app sends**, on a
+physical Pocket 3 with a Galaxy S23 Ultra over a live UDP session. It works in
+both directions and it is not slow: the lens moves and `cam_lens_state` reports
+the new floor in **well under a second**, with no picture drop and no
+reconnection. Byte `@3` is the same value `cam_status` `@5` reports back — `0D`
+on, `01` off — so the SET and the status agree on one encoding.
+
+The body **parks the lens on the new floor** each way: 217 on the way out, 434
+on the way in. A swap on its own therefore needs no zoom SET after it, and one
+sent anyway would only re-ask for where the lens already is.
+
+Three refusals were measured, and two of them are silent — no movement, no NACK:
+
+| Condition | What the body does |
+| --- | --- |
+| Recording | Ignores the swap |
+| D-Log M | Ignores the swap |
+| ActiveTrack running | Accepts the swap and **orphans the subject** |
+
+Silence is why a caller must not wait on an ACK to decide the swap landed: the
+honest confirmation is the reported floor moving, with a deadline behind it.
+
+There is an **ordering hazard** for anything that wants a zoom past where the
+body parks. A lens SET that overtakes the swap is clamped to the *old* window,
+so asking for 868 at 4K before the swap lands leaves the lens at 434 — two
+stops short, silently. The zoom has to wait for the floor to change, not for a
+timer.
+
+Not probed, and so not claimed: SlowMo, TimeLapse and SuperNight; HLG; and
+whether enabling Med-Tele clamps ISO to the 1600 ceiling the exposure menu
+shows. Each needs one run, not an argument.
+
 ## Gimbal controls
 
 The Video monitor's gimbal popup contains separate **mode** and **rotational
