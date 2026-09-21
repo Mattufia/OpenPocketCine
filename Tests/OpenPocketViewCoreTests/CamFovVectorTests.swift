@@ -51,7 +51,8 @@ import Testing
             kinds == [
                 "factorRaw", "factorLens", "lensPosition", "displayLabel", "displayTenths",
                 "matches", "nextJump", "previousJump", "stopWithinCycle", "pocket3ZoomMax",
-                "sizeTitle", "activeZoomStops", "ceilingNote",
+                "sizeTitle", "activeZoomStops", "medTeleStops", "zoomStopsLens",
+                "ceilingNote",
             ])
     }
 
@@ -108,6 +109,28 @@ import Testing
                 #expect(got.count == expected.count, "stops count \(row[1]) \(row[3]) \(row[4])")
                 for (a, b) in zip(got, expected) {
                     #expect(Self.close(a, b), "stops \(row[1]) \(row[3]) \(row[4])")
+                }
+            case "medTeleStops":
+                let got = CamFov.medTeleStops(
+                    lensMin: UInt16(row[1]) ?? 0, lensMax: UInt16(row[2]) ?? 0)
+                if want == "-" {
+                    #expect(got == nil, "medTeleStops \(row[1]) \(row[2])")
+                } else {
+                    let expected = Self.list(want)
+                    #expect(got?.count == expected.count, "medTeleStops \(row[1]) \(row[2])")
+                    for (a, b) in zip(got ?? [], expected) {
+                        #expect(Self.close(a, b), "medTeleStops \(row[1]) \(row[2])")
+                    }
+                }
+            case "zoomStopsLens":
+                let model = CameraModel(name: row[1])
+                let got = model.activeZoomStops(
+                    resolution: Self.resolution(row[3]), shootingMode: Int(row[4]) ?? -1,
+                    lensMin: UInt16(row[5]), lensMax: UInt16(row[6]))
+                let expected = Self.list(want)
+                #expect(got.count == expected.count, "zoomStopsLens \(row[1]) \(row[5])")
+                for (a, b) in zip(got, expected) {
+                    #expect(Self.close(a, b), "zoomStopsLens \(row[1]) \(row[5])")
                 }
             case "ceilingNote":
                 let got = CamFov.ceilingNote(
