@@ -306,6 +306,10 @@ separate iOS and Android lists.
   crop. Digital zoom keeps composing on top, so 2× optical with 2× digital reads
   4×. Modes that lock digital zoom keep the optical 2× base. The optical/digital
   boundary is now read from the body's reported stops instead of assuming 3×.
+- A Pocket 3 without Med-Tele no longer captions its 2.7K 3× as TELE. That 3×
+  is a crop, and it now gets the digital-crop warning like any other. Which
+  stops are optical is decided per body: on a Pocket 3 that is only the Med-Tele
+  2×, while the lens is on.
 - Android Bluetooth setup checks rejected native writes instead of waiting for
   callbacks that may never arrive. The tolerated notification fallback advances
   to the next characteristic. Failed required notification registration and

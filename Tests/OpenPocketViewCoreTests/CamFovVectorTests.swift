@@ -53,6 +53,7 @@ import Testing
                 "matches", "nextJump", "previousJump", "stopWithinCycle", "pocket3ZoomMax",
                 "sizeTitle", "activeZoomStops", "medTeleStops", "zoomStopsLens",
                 "ceilingNote", "medTeleSwappable", "medTelePlan", "zoomStopsSwap",
+                "opticalStops",
             ])
     }
 
@@ -159,6 +160,14 @@ import Testing
                 #expect(got.count == expected.count, "zoomStopsSwap \(row[1]) \(row[7])")
                 for (a, b) in zip(got, expected) {
                     #expect(Self.close(a, b), "zoomStopsSwap \(row[1]) \(row[7])")
+                }
+            case "opticalStops":
+                let got = CameraModel(name: row[1]).opticalZoomStops(
+                    cycle: Self.list(row[3]), lensMin: UInt16(row[4]))
+                let expected = Self.list(want)
+                #expect(got.count == expected.count, "opticalStops \(row[1]) \(row[3]) \(row[4])")
+                for (a, b) in zip(got, expected) {
+                    #expect(Self.close(a, b), "opticalStops \(row[1]) \(row[3]) \(row[4])")
                 }
             default:
                 Issue.record("unknown vector kind \(row[0])")

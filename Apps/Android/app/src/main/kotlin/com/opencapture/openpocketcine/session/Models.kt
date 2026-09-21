@@ -93,6 +93,26 @@ data class CameraModel(
         return zoomStops.ifEmpty { listOf(1.0, 2.0, 4.0) }
     }
 
+    /**
+     * Which of [cycle]'s stops are a real lens rather than a crop, for the caption and the
+     * digital-crop warning.
+     *
+     * Decided per body, not read off the cycle's contents. A Pocket 3 has one second lens,
+     * Med-Tele's 2×, and it is on exactly when the body reports a wide limit above 1× — so its
+     * optics are 1×/2× then and 1× otherwise, never 1×/3×: the 3× in its 2.7K cycle is a
+     * crop. Elsewhere a floor above 1× can only be a lens the body has put in front, and a 3×
+     * in the cycle is the Pocket 4 Pro's 60 mm tele. [lensMin] `-1` means not reported yet.
+     */
+    fun opticalZoomStops(cycle: List<Double>, lensMin: Int = -1): List<Double> {
+        val n = name.lowercase().replace(" ", "")
+        if (n.contains("pocket3") || n.contains("muse")) {
+            return if (lensMin >= 0 && CamFov.isMedTele(lensMin)) listOf(1.0, 2.0) else listOf(1.0)
+        }
+        val base = cycle.firstOrNull() ?: 1.0
+        if (base > 1.05) return listOf(1.0, base)
+        return if (3.0 in cycle) listOf(1.0, 3.0) else listOf(1.0)
+    }
+
     companion object {
         val default = CameraModel(name = "DJI Osmo camera")
 

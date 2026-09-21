@@ -433,23 +433,11 @@ final class CameraSession {
         }
         return CamFov.displayTenths(factor)
     }
-    /// Which of the cycle's stops are a real lens rather than a crop.
-    ///
-    /// A floor above 1x can only be a second lens the body has put in front of
-    /// the sensor, so it is optical by construction. Derived from the cycle
-    /// rather than measured again, so there is one source of truth.
+    /// Which of the cycle's stops are a real lens rather than a crop — see
+    /// `CameraModel.opticalZoomStops`.
     var zoomOpticalStops: [Double] {
-        let stops = zoomStops
-        let base = stops.first ?? 1
-        if base > 1.05 { return [1, base] }
-        if medTeleSwappable {
-            // The cycle's floor is 1x again, so it no longer says which lens is
-            // on: ask the body. 2x is the Med-Tele lens while it is wearing it and
-            // a crop when it is not, and this body has no optical 3x for the
-            // fallback below to find.
-            return CamFov.isMedTele(lensMin: status.zoomLensMin ?? CamFov.lens1x) ? [1, 2] : [1]
-        }
-        return stops.contains(3) ? [1, 3] : [1]
+        connectedCamera?.model.opticalZoomStops(cycle: zoomStops, lensMin: status.zoomLensMin)
+            ?? [1]
     }
     /// Pinch HUD between `cam_fov` pushes. Nil when fingers are up.
     var zoomPinchPreview: Double?

@@ -718,6 +718,32 @@ Verification: core and shell unit tests both sides. **Physical Android is
 pending** — this section is not done until the cycle is driven on the Pocket 3.
 Physical iOS remains pending as before: no iPhone is available to this project.
 
+### Pocket 3 optical stops per body (2026-09-21)
+
+Reported on Android at 2.7K30 with Med-Tele off: holding 3× captioned it
+**TELE** and dropped the amber digital-crop warning. The 3× there is a crop —
+the Pocket 3's only second lens is Med-Tele's 2×.
+
+Both shells ended `zoomOpticalStops` on the same fallback, "a cycle containing
+3× has an optical 3×", written for the Pocket 4 Pro's 60 mm tele. A Pocket 3 at
+2.7K cycles 1×/2×/3×, so it matched. The Med-Tele branch above did not cover
+it: that branch needs the body to have shown the lens at least once in the
+session, and without it the old fallback ran.
+
+The rule now lives in `CameraModel.opticalZoomStops(cycle:lensMin:)`, one per
+language, and is decided by **body** rather than by what the cycle happens to
+contain: a Pocket 3's optics are 1×/2× while `cam_lens_state` reports a wide
+limit above 1× and 1× otherwise, never 1×/3×. Other bodies keep the previous
+rule. Both shells' `zoomOpticalStops` are now a call to it.
+
+Cross-language vectors: `opticalStops` in `Tests/Fixtures/camfov-vectors.tsv`,
+with the reported 2.7K case as its first row and Pocket 4 Pro rows that keep
+its optical 3×.
+
+Verification: core and shell unit tests both sides. **Physical Android is
+pending** at 2.7K and 1080P (where the cycle reaches 4×). Physical iOS remains
+pending: no iPhone is available to this project.
+
 ### Zoom chip pin expiry (2026-09-18)
 
 The survey left the chip latched: `zoomOptimistic` — the asked-for factor the

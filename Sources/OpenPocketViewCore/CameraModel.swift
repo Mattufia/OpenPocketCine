@@ -166,6 +166,25 @@ public struct CameraModel: Equatable, Sendable {
         }
     }
 
+    /// Which of `cycle`'s stops are a real lens rather than a crop, for the
+    /// caption and the digital-crop warning.
+    ///
+    /// Decided per body, not read off the cycle's contents. A Pocket 3 has one
+    /// second lens, Med-Tele's 2x, and it is on exactly when the body reports a
+    /// wide limit above 1x — so its optics are [1, 2] then and [1] otherwise,
+    /// never [1, 3]: the 3x in its 2.7K cycle is a crop. Elsewhere a floor above
+    /// 1x can only be a lens the body has put in front, and a 3x in the cycle is
+    /// the Pocket 4 Pro's 60 mm tele.
+    public func opticalZoomStops(cycle: [Double], lensMin: UInt16?) -> [Double] {
+        let n = name.lowercased().replacingOccurrences(of: " ", with: "")
+        if n.contains("pocket3") || n.contains("muse") {
+            return lensMin.map { CamFov.isMedTele(lensMin: $0) } == true ? [1, 2] : [1]
+        }
+        let base = cycle.first ?? 1
+        if base > 1.05 { return [1, base] }
+        return cycle.contains(3) ? [1, 3] : [1]
+    }
+
     /// The other datalink config to try when `datalinkPort` never answers (9004+poke <-> 10004).
     public func alternate() -> CameraModel {
         datalinkPort == 9004

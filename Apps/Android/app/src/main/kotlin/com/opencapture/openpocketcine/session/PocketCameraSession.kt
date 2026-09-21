@@ -2559,25 +2559,11 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
 
     /**
      * The stops that are optics rather than a crop of them, for the caption and the
-     * digital-crop warning.
-     *
-     * A floor above 1× can only be a second lens the body has put in front — nothing crops
-     * its way to a wider limit — so under Med-Tele the base 2× counts as optics. Otherwise
-     * only a 3× body has a second lens.
+     * digital-crop warning — see [CameraModel.opticalZoomStops].
      */
-    fun zoomOpticalStops(): List<Double> {
-        val stops = zoomStops()
-        val base = stops.firstOrNull() ?: 1.0
-        if (base > 1.05) return listOf(1.0, base)
-        if (medTeleSwappable()) {
-            // The cycle's floor is 1× again, so it no longer says which lens is on: ask the
-            // body. 2× is the Med-Tele lens while it is wearing it and a crop when it is
-            // not, and this body has no optical 3× for the fallback below to find.
-            return if (CamFov.isMedTele(_status.value.zoomLensMin)) listOf(1.0, 2.0)
-            else listOf(1.0)
-        }
-        return if (3.0 in stops) listOf(1.0, 3.0) else listOf(1.0)
-    }
+    fun zoomOpticalStops(): List<Double> =
+        (connectedCamera?.model ?: CameraModel.default)
+            .opticalZoomStops(zoomStops(), _status.value.zoomLensMin)
 
     fun zoomNextJump(): Double = CamFov.nextJump(zoomCycleFrom(), zoomStops())
 
