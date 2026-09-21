@@ -52,7 +52,7 @@ import Testing
                 "factorRaw", "factorLens", "lensPosition", "displayLabel", "displayTenths",
                 "matches", "nextJump", "previousJump", "stopWithinCycle", "pocket3ZoomMax",
                 "sizeTitle", "activeZoomStops", "medTeleStops", "zoomStopsLens",
-                "ceilingNote",
+                "ceilingNote", "opticalStops",
             ])
     }
 
@@ -136,6 +136,14 @@ import Testing
                 let got = CamFov.ceilingNote(
                     size: row[1], held: Double(row[2]) ?? 0, stops: Self.list(row[3]))
                 #expect((got ?? "-") == want, "ceilingNote \(row[1]) \(row[2])")
+            case "opticalStops":
+                let got = CameraModel(name: row[1]).opticalZoomStops(
+                    cycle: Self.list(row[3]), lensMin: UInt16(row[4]))
+                let expected = Self.list(want)
+                #expect(got.count == expected.count, "opticalStops \(row[1]) \(row[3]) \(row[4])")
+                for (a, b) in zip(got, expected) {
+                    #expect(Self.close(a, b), "opticalStops \(row[1]) \(row[3]) \(row[4])")
+                }
             default:
                 Issue.record("unknown vector kind \(row[0])")
             }

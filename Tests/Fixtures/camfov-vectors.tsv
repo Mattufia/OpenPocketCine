@@ -28,6 +28,7 @@
 #   medTeleStops     lensMin lensMax   -> stops|-          `-` = Med-Tele off
 #   zoomStopsLens    name family res mode lensMin lensMax -> stops
 #   ceilingNote      size held stops   -> text             FORMAT-drop warning
+#   opticalStops     name family cycle lensMin -> stops   lensMin `-` = not reported
 
 factorRaw	0	1.0000
 factorRaw	1000	12.0000
@@ -354,3 +355,15 @@ stopWithinCycle	2.0000	2.0000,3.0000,4.0000	2.0000
 stopWithinCycle	3.0000	2.0000,3.0000,4.0000	3.0000
 stopWithinCycle	6.0000	2.0000,3.0000,4.0000	4.0000
 stopWithinCycle	1.0000	2.0000	2.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000,3.0000	217	1.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000,3.0000	-	1.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000,4.0000	217	1.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000	217	1.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000,3.0000,4.0000	217	1.0000
+opticalStops	Osmo Pocket 3	pocket	1.0000,2.0000,3.0000,4.0000	434	1.0000,2.0000
+opticalStops	Osmo Pocket 3	pocket	2.0000,3.0000,4.0000	434	1.0000,2.0000
+opticalStops	Osmo Pocket 3	pocket	2.0000	434	1.0000,2.0000
+opticalStops	Osmo Pocket 4 Pro	pocket	1.0000,3.0000,6.0000,12.0000	217	1.0000,3.0000
+opticalStops	Osmo Pocket 4 Pro	pocket	1.0000,3.0000	-	1.0000,3.0000
+opticalStops	Osmo Pocket 4	pocket	1.0000,2.0000,4.0000	217	1.0000
+opticalStops	Osmo Nano	nano	1.0000	-	1.0000

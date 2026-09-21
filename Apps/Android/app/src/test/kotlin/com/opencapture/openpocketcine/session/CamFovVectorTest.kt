@@ -66,6 +66,7 @@ class CamFovVectorTest {
                 "medTeleStops",
                 "zoomStopsLens",
                 "ceilingNote",
+                "opticalStops",
             ),
             vectors.map { it[0] }.toSet(),
         )
@@ -155,6 +156,13 @@ class CamFovVectorTest {
                         CamFov.ceilingNote(row[1], row[2].toDouble(), list(row[3])) ?: "-",
                         where,
                     )
+                "opticalStops" -> {
+                    val model = CameraModel(name = row[1], family = row[2])
+                    val got = model.opticalZoomStops(list(row[3]), row[4].toIntOrNull() ?: -1)
+                    val expected = list(want)
+                    assertEquals(expected.size, got.size, where)
+                    got.zip(expected).forEach { (a, b) -> assertTrue(close(a, b), where) }
+                }
                 else -> fail("unknown vector kind ${row[0]}")
             }
         }
