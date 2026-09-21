@@ -920,6 +920,24 @@ far-left stop and centred at 3.00×, confirming a 2…4 scale; the operator drov
 a drag end to end. Physical iOS verification remains pending: no iPhone is
 available to this project.
 
+### Pocket 3 optical stops per body (2026-09-21)
+
+Reported on Android at 2.7K30 with Med-Tele off: holding 3× captioned it
+**TELE** and dropped the amber digital-crop warning. The 3× there is a crop —
+the Pocket 3's only second lens is Med-Tele's 2×. Both shells fell back to "a
+cycle containing 3× has an optical 3×", written for the Pocket 4 Pro's 60 mm
+tele, and a Pocket 3 at 2.7K cycles 1×/2×/3×.
+
+The rule now lives in `CameraModel.opticalZoomStops(cycle:lensMin:)`, one per
+language, and is decided by **body**: a Pocket 3's optics are 1×/2× while
+`cam_lens_state` reports a wide limit above 1× and 1× otherwise, never 1×/3×.
+Other bodies keep the previous rule. Cross-language vectors: `opticalStops` in
+`Tests/Fixtures/camfov-vectors.tsv`.
+
+Verification: physical Pocket 3 + Galaxy S23 Ultra (2026-09-25): without
+Med-Tele, 3× at 2.7K and at 1080P reads as a digital crop, not TELE. Physical
+iOS pending: no iPhone is available to this project.
+
 ### Zoom chip pin expiry (2026-09-18)
 
 The survey left the chip latched: `zoomOptimistic` — the asked-for factor the
