@@ -211,7 +211,11 @@ Current zoom chips are (Pocket 4 Pro 1×/3×/6×/12×; Pocket 4 1×/2×/4×;
 Pocket 3 1×/2×/4× with 4K max 2×; Nano 1×). Pocket 3's ceiling is
 per-FORMAT, not one generic 4×: **1080 4×, 2.7K 3×, 2160 1:1 3×, 4K 2×,
 3K 1:1 2×**
-([survey](https://openpocketcine.app/docs/devices/pocket-3/controls/#zoom-and-med-tele)). Zoom must not drop the live
+([survey](https://openpocketcine.app/docs/devices/pocket-3/controls/#zoom-and-med-tele)).
+With **Med-Tele** on, that ceiling does not apply: the chip cycles **2×/3×/4×**
+and marks the 2× base **TELE**, because it is the second lens rather than a
+crop. Digital zoom composes on top of it — 2× optical plus 2× digital reads 4×.
+Zoom must not drop the live
 picture. FORMAT lists `camcap_video_format` pairs (2.7K / 4:3 / 1:1 / 9:16
 when the body advertises them; aspect is the res byte). A tap stays on that
 pair until the body reports it. Pocket 3 normal Video also has a

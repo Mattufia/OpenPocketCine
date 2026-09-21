@@ -298,6 +298,14 @@ separate iOS and Android lists.
   the defect. Physical camera qualification remains pending; the
   [Sentry audit](docs/audits/2026-09-21-sentry-crashes-dropouts.md) records the
   remaining discovery, dropout and native-crash investigations.
+- Pocket 3 zoom under **Med-Tele**, the body's 2× lens. Both shells now read the
+  accepted lens window the camera already reports and offer the range that
+  actually exists: the chip cycles 2× / 3× / 4× instead of wrapping to an
+  unreachable 1×, the held dial spans 2×…4× instead of stopping at its own
+  floor, and the 2× base is captioned TELE rather than warned about as a digital
+  crop. Digital zoom keeps composing on top, so 2× optical with 2× digital reads
+  4×. Modes that lock digital zoom keep the optical 2× base. The optical/digital
+  boundary is now read from the body's reported stops instead of assuming 3×.
 - Android Bluetooth setup checks rejected native writes instead of waiting for
   callbacks that may never arrive. The tolerated notification fallback advances
   to the next characteristic. Failed required notification registration and

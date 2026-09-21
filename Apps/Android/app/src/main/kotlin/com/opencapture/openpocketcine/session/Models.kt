@@ -39,8 +39,20 @@ data class CameraModel(
      * 1080 keeps 1×/2×/4× while 2.7K and 2160 1:1 stop at 3× and 4K and 3K 1:1
      * stop at 2× — see [VideoResolution.pocket3ZoomMax]. With no FORMAT known
      * yet, offer the body's absolute range.
+     *
+     * [lensMin] / [lensMax] are the body's own reported limits ([CameraStatus.zoomLensMin],
+     * [CameraStatus.zoomLensMax]). They outrank the per-FORMAT table whenever they disagree
+     * with it, because they come from the camera rather than from a measurement: under
+     * Pocket 3 Med-Tele the range is a fixed 2×…4× in every FORMAT, so the table's 4K entry
+     * would otherwise cap the cycle at what is really the floor. `-1` means not reported
+     * yet and keeps the table.
      */
-    fun activeZoomStops(resolutionCode: Int = -1, shootingMode: Int = -1): List<Double> {
+    fun activeZoomStops(
+        resolutionCode: Int = -1,
+        shootingMode: Int = -1,
+        lensMin: Int = -1,
+        lensMax: Int = -1,
+    ): List<Double> {
         val n = name.lowercase().replace(" ", "")
         val isPro = n.contains("pocket4p") || n.contains("4pro")
         val isPocket4 = n.contains("pocket4")
@@ -50,6 +62,14 @@ data class CameraModel(
                 shootingMode == CameraCommands.SHOOT_TIMELAPSE ||
                 shootingMode == CameraCommands.SHOOT_SUPER_NIGHT
         if (isPro) return if (digitalLocked) listOf(1.0, 3.0) else listOf(1.0, 3.0, 6.0, 12.0)
+        if (isPocket3) {
+            // The raised floor is the body's word and holds whatever else is going on:
+            // with digital zoom locked the cycle is the optical base alone, which under
+            // Med-Tele is 2×, not the 1× the lens cannot reach.
+            CamFov.medTeleStops(lensMin, lensMax)?.let { stops ->
+                return if (digitalLocked) stops.take(1) else stops
+            }
+        }
         if (digitalLocked) return listOf(1.0)
         if (isPocket4) return listOf(1.0, 2.0, 4.0)
         if (isPocket3) {
@@ -283,6 +303,10 @@ data class CameraStatus(
     val focusTrack: Int = -1,
     /** `cam_lens_state` u16-LE `@14`. `-1` unknown. */
     val zoomLens: Int = -1,
+    /** `cam_lens_state` u16-LE `@10` — the body's own wide limit. `-1` unknown. */
+    val zoomLensMin: Int = -1,
+    /** `cam_lens_state` u16-LE `@12` — the body's own tele limit. `-1` unknown. */
+    val zoomLensMax: Int = -1,
     /** Hybrid zoom (1.0×…12×). Null until lens/`cam_fov` lands. */
     val zoomFactor: Double? = null,
     /** Last `0x8E` pid `0x0039` blob `@5` non-zero. Null unknown. */
@@ -510,6 +534,8 @@ data class CameraStatus(
             hasCameraFocusPoint = prev.hasCameraFocusPoint,
             focusTrack = prev.focusTrack,
             zoomLens = prev.zoomLens,
+            zoomLensMin = prev.zoomLensMin,
+            zoomLensMax = prev.zoomLensMax,
             zoomFactor = prev.zoomFactor,
             glamourEnabled = prev.glamourEnabled,
             selfieFlip = prev.selfieFlip,
@@ -568,6 +594,8 @@ data class CameraStatus(
             .put("hasCameraFocusPoint", hasCameraFocusPoint)
             .put("focusTrack", focusTrack)
             .put("zoomLens", zoomLens)
+            .put("zoomLensMin", zoomLensMin)
+            .put("zoomLensMax", zoomLensMax)
             .put("zoomFactor", zoomFactor ?: JSONObject.NULL)
             .put("glamourEnabled", glamourEnabled ?: JSONObject.NULL)
             .put("selfieFlip", selfieFlip ?: JSONObject.NULL)
@@ -666,6 +694,8 @@ data class CameraStatus(
                     hasCameraFocusPoint = obj.optBoolean("hasCameraFocusPoint", false),
                     focusTrack = obj.optInt("focusTrack", -1),
                     zoomLens = obj.optInt("zoomLens", -1),
+                    zoomLensMin = obj.optInt("zoomLensMin", -1),
+                    zoomLensMax = obj.optInt("zoomLensMax", -1),
                     zoomFactor = optionalDouble(obj, "zoomFactor"),
                     glamourEnabled = optionalBoolean(obj, "glamourEnabled"),
                     selfieFlip = optionalBoolean(obj, "selfieFlip"),

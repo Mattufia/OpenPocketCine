@@ -63,8 +63,6 @@ import androidx.compose.ui.window.PopupProperties
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 
@@ -103,13 +101,19 @@ private fun physicalZoomInsets(view: android.view.View, observed: IntRect): IntR
 @Composable
 fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
     onChange: (Double) -> Unit, onDismiss: () -> Unit,
+    minimum: Double = 1.0,
     opticalStops: List<Double> = listOf(1.0), caption: (Double) -> String = { "ZOOM" },
     trailingInset: Float = 0f, attachment: MonitorZoomAttachment = MonitorZoomAttachment.Trailing,
     bottomClearance: Float = 0f, onDetent: () -> Unit = {}) {
     val maxZoom = maximum.takeIf { it.isFinite() }?.coerceAtLeast(1.0) ?: 1.0
-    val logMax = ln(maxZoom).coerceAtLeast(.001)
-    val initialValue = initial.takeIf { it.isFinite() }?.coerceIn(1.0, maxZoom) ?: 1.0
-    var position by remember { mutableFloatStateOf((ln(initialValue) / logMax).toFloat()) }
+    // A body can hold its own floor above 1× — Pocket 3 Med-Tele starts at 2× — and the
+    // travel below it is dead: the camera clamps the ask back up while the needle keeps
+    // claiming it went. Give that travel away rather than spend the scale on it.
+    val minZoom = minimum.takeIf { it.isFinite() && it > 0.0 }?.coerceAtMost(maxZoom) ?: 1.0
+    val initialValue = initial.takeIf { it.isFinite() }?.coerceIn(minZoom, maxZoom) ?: minZoom
+    var position by remember {
+        mutableFloatStateOf(MonitorZoomScale.position(initialValue, minZoom, maxZoom).toFloat())
+    }
     var entering by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     val motion by animateFloatAsState(if (entering && !closing) 1f else 0f,
@@ -157,21 +161,19 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
     val radius = disc.radius
     val pixelDisc = MonitorZoomGeometry(
         radius * density.density, disc.edgeExtension * density.density, disc.attachment)
-    val factor = exp(position * logMax).coerceIn(1.0, maxZoom)
+    val factor = MonitorZoomScale.valueAt(position.toDouble(), minZoom, maxZoom)
     val optical = opticalStops.any { abs(it - factor) < .05 }
     val accent = if (optical) MonitorPalette.accent else MonitorPalette.digitalCrop
     val textMeasurer = rememberTextMeasurer()
     fun update(next: Float) {
         if (!next.isFinite() || closing) return
         val unconstrained = MonitorZoomScale.quantized(
-            exp(next.toDouble().coerceIn(0.0, 1.0) * logMax).coerceIn(1.0, maxZoom),
-            maximum = maxZoom)
+            MonitorZoomScale.valueAt(next.toDouble(), minZoom, maxZoom), minZoom, maxZoom)
         val current = MonitorZoomScale.quantized(
-            exp(position.toDouble().coerceIn(0.0, 1.0) * logMax).coerceIn(1.0, maxZoom),
-            maximum = maxZoom)
-        val factor = MonitorZoomScale.slowSnap(unconstrained, current, maximum = maxZoom)
+            MonitorZoomScale.valueAt(position.toDouble(), minZoom, maxZoom), minZoom, maxZoom)
+        val factor = MonitorZoomScale.slowSnap(unconstrained, current, minZoom, maxZoom)
         if (MonitorDialHaptic.shouldTick(current, factor, MonitorZoomScale.wholeStops)) detent()
-        position = MonitorZoomScale.position(factor, 1.0, maxZoom).toFloat()
+        position = MonitorZoomScale.position(factor, minZoom, maxZoom).toFloat()
         send(factor)
     }
     val provider = remember { object : PopupPositionProvider {
@@ -203,7 +205,7 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
                     alpha = motion }
                 .monitorMaterial(MonitorMaterial.Zoom, MonitorZoomDiscShape(attachment))) {
                 Canvas(Modifier.fillMaxSize().semantics {
-                    contentDescription = "Zoom ${MonitorZoomScale.dialLabel(factor, maximum = maxZoom)}"
+                    contentDescription = "Zoom ${MonitorZoomScale.dialLabel(factor, minZoom, maxZoom)}"
                     progressBarRangeInfo = ProgressBarRangeInfo(position, 0f..1f)
                     setProgress { update(it); true }
                     customActions = listOf(CustomAccessibilityAction("Close zoom") { closing = true; true })
@@ -263,20 +265,20 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
                         val a = angle(t)
                         val delta = a - PI / 2
                         if (abs(delta) > window) return
-                        val tick = MonitorZoomScale.valueAt(t, 1.0, maxZoom)
+                        val tick = MonitorZoomScale.valueAt(t, minZoom, maxZoom)
                         val digital = tick > (opticalStops.maxOrNull() ?: 1.0) + .02
                         val color = if (digital) MonitorPalette.digitalCrop else Color.White
                         drawLine(color.copy(alpha = (if (major) .7f else .3f) * alpha(a)),
                             point(a, 164f), point(a, if (major) 143f else 155f),
                             (if (major) 2.2f else 1.2f) * scale, StrokeCap.Round)
                     }
-                    val labeled = MonitorZoomScale.labeledTicks.filter { it in 1.0..maxZoom }
-                    val majors = labeled.map { MonitorZoomScale.position(it, 1.0, maxZoom) }
+                    val labeled = MonitorZoomScale.labeledTicks.filter { it in minZoom..maxZoom }
+                    val majors = labeled.map { MonitorZoomScale.position(it, minZoom, maxZoom) }
                     for (t in MonitorZoomScale.minorTickPositions()) {
                         if (majors.none { abs(it - t) < 0.012 }) stroke(t, false)
                     }
                     for (tick in labeled) {
-                        val t = MonitorZoomScale.position(tick, 1.0, maxZoom)
+                        val t = MonitorZoomScale.position(tick, minZoom, maxZoom)
                         stroke(t, true)
                         val a = angle(t)
                         if (abs(a - PI / 2) > window) continue
@@ -306,7 +308,7 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
                     else (radius * .04f + disc.edgeExtension).dp,
                 ),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(MonitorZoomScale.dialLabel(factor, maximum = maxZoom),
+                    Text(MonitorZoomScale.dialLabel(factor, minZoom, maxZoom),
                         style = MonitorTypography.readout(radius * .19f, FontWeight.Bold))
                     Text(caption(factor), style = MonitorTypography.text(10f, FontWeight.Medium), color = accent)
                 }

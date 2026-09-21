@@ -2494,10 +2494,38 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
 
     fun zoomStops(): List<Double> {
         val model = connectedCamera?.model ?: CameraModel.default
-        return model.activeZoomStops(_status.value.resolutionCode, _status.value.shootingMode)
+        val status = _status.value
+        return model.activeZoomStops(
+            status.resolutionCode,
+            status.shootingMode,
+            status.zoomLensMin,
+            status.zoomLensMax,
+        )
     }
 
     fun zoomMax(): Double = zoomStops().lastOrNull() ?: 1.0
+
+    /**
+     * The widest the body will actually go. Normally 1×, but Pocket 3 Med-Tele parks a
+     * 40 mm lens in front and clamps anything wider back to it, so the dial must not
+     * offer travel the camera will refuse to honour.
+     */
+    fun zoomMin(): Double = zoomStops().firstOrNull() ?: 1.0
+
+    /**
+     * The stops that are optics rather than a crop of them, for the caption and the
+     * digital-crop warning.
+     *
+     * A floor above 1× can only be a second lens the body has put in front — nothing crops
+     * its way to a wider limit — so under Med-Tele the base 2× counts as optics. Otherwise
+     * only a 3× body has a second lens.
+     */
+    fun zoomOpticalStops(): List<Double> {
+        val stops = zoomStops()
+        val base = stops.firstOrNull() ?: 1.0
+        if (base > 1.05) return listOf(1.0, base)
+        return if (3.0 in stops) listOf(1.0, 3.0) else listOf(1.0)
+    }
 
     fun zoomNextJump(): Double = CamFov.nextJump(zoomCycleFrom(), zoomStops())
 
@@ -2567,7 +2595,7 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
             lastPinchLens = null
             lastPinchLogTenths = null
         }
-        val factor = CamFov.pinchFactor(zoomPinchAnchor, magnification, zoomMax())
+        val factor = CamFov.pinchFactor(zoomPinchAnchor, magnification, zoomMax(), zoomMin())
         if (blockZoomColorHopIfRecording(factor)) return
         val first = zoomPinchPreview == null
         dropDLog2ForZoom(factor)
@@ -3343,7 +3371,12 @@ class PocketCameraSession(context: Context) : CameraSessionSeam {
                     zoomCycleFrom(),
                     connectedCamera
                         ?.model
-                        ?.activeZoomStops(format.resolution.rawValue, modeAtSet)
+                        ?.activeZoomStops(
+                            format.resolution.rawValue,
+                            modeAtSet,
+                            _status.value.zoomLensMin,
+                            _status.value.zoomLensMax,
+                        )
                         .orEmpty(),
                 )
         }
