@@ -4,6 +4,7 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -62,6 +63,8 @@ class CamFovVectorTest {
                 "pocket3ZoomMax",
                 "sizeTitle",
                 "activeZoomStops",
+                "medTeleStops",
+                "zoomStopsLens",
                 "ceilingNote",
             ),
             vectors.map { it[0] }.toSet(),
@@ -116,6 +119,31 @@ class CamFovVectorTest {
                         model.activeZoomStops(
                             resolution(row[3])?.rawValue ?: -1,
                             row[4].toInt(),
+                        )
+                    val expected = list(want)
+                    assertEquals(expected.size, got.size, where)
+                    got.zip(expected).forEach { (a, b) -> assertTrue(close(a, b), where) }
+                }
+                "medTeleStops" -> {
+                    val got = CamFov.medTeleStops(row[1].toInt(), row[2].toInt())
+                    if (want == "-") {
+                        assertNull(got, where)
+                    } else {
+                        val expected = list(want)
+                        assertEquals(expected.size, got?.size, where)
+                        got.orEmpty().zip(expected).forEach { (a, b) ->
+                            assertTrue(close(a, b), where)
+                        }
+                    }
+                }
+                "zoomStopsLens" -> {
+                    val model = CameraModel(name = row[1], family = row[2])
+                    val got =
+                        model.activeZoomStops(
+                            resolution(row[3])?.rawValue ?: -1,
+                            row[4].toInt(),
+                            row[5].toInt(),
+                            row[6].toInt(),
                         )
                     val expected = list(want)
                     assertEquals(expected.size, got.size, where)
