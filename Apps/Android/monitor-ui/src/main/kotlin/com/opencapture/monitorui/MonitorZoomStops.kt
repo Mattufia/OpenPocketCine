@@ -50,6 +50,17 @@ object MonitorZoomCaption {
         return factor.isFinite() && abs(factor - tele) < 0.05
     }
 
+    /**
+     * True while the second lens is in front, cropped or not: at [opticalTele] and past
+     * it, where every factor is that lens plus digital zoom. The chip keeps TELE up across
+     * the whole range so the operator can tell Med-Tele 4× (the 2× lens, cropped 2×) from
+     * the same 4× cropped out of the wide lens — [isDigital] still colours the number.
+     */
+    fun isOnTeleLens(factor: Double, opticalStops: List<Double>): Boolean {
+        val tele = opticalTele(opticalStops) ?: return false
+        return factor.isFinite() && factor > tele - 0.05
+    }
+
     fun label(factor: Double, opticalStops: List<Double>): String {
         if (!factor.isFinite()) return "WIDE"
         if (abs(factor - 1.0) < 0.05) return "WIDE"

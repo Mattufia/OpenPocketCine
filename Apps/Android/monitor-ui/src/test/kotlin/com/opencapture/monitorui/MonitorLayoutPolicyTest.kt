@@ -183,6 +183,19 @@ class MonitorLayoutPolicyTest {
     }
 
     @Test
+    fun medTeleSitsBesideFitClearOfTheStickAndAssists() {
+        for (width in listOf(320f, 360f, 393f, 440f, 744f)) {
+            val floor = 700f
+            val fit = MonitorLayoutPolicy.portraitAspect(width, floor)
+            val mt = MonitorLayoutPolicy.portraitMedTele(width, floor)
+            assertEquals(fit.y, mt.y, .01f)
+            assertEquals(fit.x - 8f, mt.maxX, .01f)
+            assertTrue(MonitorLayoutPolicy.portraitAssists(floor, width >= 600f).maxX < mt.x)
+            assertTrue(fit.maxX < MonitorLayoutPolicy.portraitStick(width, floor).x)
+        }
+    }
+
+    @Test
     fun portraitStickZoomGimbalMatchFieldMonitorLayout() {
         val stick = MonitorLayoutPolicy.portraitStick(393f, 700f)
         val zoom = MonitorLayoutPolicy.portraitZoom(stick)

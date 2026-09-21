@@ -155,6 +155,16 @@ object MonitorLayoutPolicy {
     fun portraitAspect(width: Float, floor: Float): MonitorRect =
         MonitorRect(max(0f, width) / 2f - 24f, max(0f, floor - 56f), 48f, 48f)
 
+    /**
+     * The Pocket 3 Med-Tele button: FIT's twin, one slot to its leading side. Leading
+     * because trailing is where the gimbal stick sits, which reaches the middle on a
+     * narrow phone; leading only has the assists rail, which ends well short of it.
+     */
+    fun portraitMedTele(width: Float, floor: Float): MonitorRect {
+        val fit = portraitAspect(width, floor)
+        return MonitorRect(fit.x - fit.width - 8f, fit.y, fit.width, fit.height)
+    }
+
     /** FieldMonitorLayout portrait stick / zoom / gimbal. */
     fun portraitStick(width: Float, floor: Float): MonitorRect =
         MonitorRect(max(0f, width) - 104f, floor - 104f, 88f, 88f)

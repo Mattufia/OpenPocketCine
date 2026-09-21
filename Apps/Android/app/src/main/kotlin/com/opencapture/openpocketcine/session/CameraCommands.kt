@@ -549,7 +549,7 @@ object CameraCommands {
      *
      * Silently ignored — no movement, no NACK — while recording and in any colour
      * mode but Normal. Accepted with ActiveTrack running, but the subject is lost.
-     * Callers must gate on those; see `CamFov.medTeleSwappable`.
+     * Callers must gate on those; see `CamFov.medTeleToggleable`.
      */
     fun medTele(on: Boolean): ByteArray =
         byteArrayOf(0x00, 0x15, 0x00, if (on) 0x0D else 0x01, 0x00, 0x00, 0x00)

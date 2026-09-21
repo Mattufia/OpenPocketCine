@@ -169,6 +169,11 @@ fun portraitAspectToggle(viewportWidth: Float, floorY: Float): ChromeRect {
     return ChromeRect(frame.x, frame.y, frame.width, frame.height)
 }
 
+fun portraitMedTeleToggle(viewportWidth: Float, floorY: Float): ChromeRect {
+    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitMedTele(viewportWidth, floorY)
+    return ChromeRect(frame.x, frame.y, frame.width, frame.height)
+}
+
 fun portraitAssistToolbar(floorY: Float, tablet: Boolean): ChromeRect {
     val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitAssists(floorY, tablet)
     return ChromeRect(frame.x, frame.y, frame.width, frame.height)
@@ -235,6 +240,7 @@ fun LivePortraitChrome(
     val zoom = cluster.zoom
     val gimbalButton = cluster.controls
     val toggle = portraitAspectToggle(layout.viewportWidth, floorY)
+    val medTeleFrame = portraitMedTeleToggle(layout.viewportWidth, floorY)
     val rail = portraitAssistToolbar(floorY, tablet)
 
     Box(Modifier.fillMaxSize()) {
@@ -355,6 +361,19 @@ fun LivePortraitChrome(
                         )
                     }
                 },
+            )
+        }
+
+        if (editing == null && model.session.connectedCamera?.model?.hasMedTele == true) {
+            val medTeleAsked by model.session.medTeleAsked.collectAsState()
+            val medTeleOn = medTeleAsked ?: (status.zoomLensMin >= 0 && CamFov.isMedTele(status.zoomLensMin))
+            val medTeleReady = !uiLocked &&
+                CamFov.medTeleToggleable(status.colorMode, status.isRecording, status.shootingMode)
+            LivePortraitMedTeleToggle(
+                on = medTeleOn,
+                enabled = !uiLocked,
+                modifier = Modifier.liveModuleFrame(medTeleFrame).alpha(if (medTeleReady) 1f else 0.4f),
+                onClick = { model.session.toggleMedTele() },
             )
         }
 
@@ -595,6 +614,33 @@ fun LivePortraitSystemBar(
                 onClick = model::pressShutter,
             )
         }
+    }
+}
+
+/**
+ * Pocket 3 Med-Tele: the second, 2× lens. Its own button rather than a zoom stop, because
+ * the body decides where the zoom lands after the swap. Dimmed — but still tappable, so
+ * the note can say why — while recording, in D-Log M and outside Video mode, the states
+ * where the body refuses the swap without a word.
+ */
+@Composable
+fun LivePortraitMedTeleToggle(on: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .size(LivePortraitMetrics.TOGGLE.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.55f))
+            .border(1.dp, if (on) LiveDesign.accent else LiveDesign.hairline, CircleShape)
+            .chromeClickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = if (on) "Turn Med-Tele off" else "Turn Med-Tele on" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "MT",
+            color = if (on) LiveDesign.accent else LiveDesign.text,
+            style = LiveType.ui(9f, FontWeight.Bold),
+            maxLines = 1,
+        )
     }
 }
 

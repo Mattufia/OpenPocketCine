@@ -23,8 +23,6 @@ object CamFov {
     const val RAW_AT_12X = 2_341
 
     const val LENS_1X = 217
-    /** Where a Pocket 3 parks when Med-Tele comes on — its 2× lens, measured. */
-    const val LENS_MED_TELE = 434
     const val LENS_3X = 651
     const val LENS_6X = 1_302
     const val LENS_12X = 2_604
@@ -38,12 +36,12 @@ object CamFov {
     const val VIDEO_GRACE_SEC = 4.0
 
     /**
-     * How long to wait for a Med-Tele swap to show up in the reported floor before giving
-     * up on the zoom queued behind it.
+     * How long to wait for a Med-Tele swap to show up in the reported floor before telling
+     * the operator it did not happen.
      *
      * Measured under 1 s in both directions over many runs; this is that with room, not a
      * guess. It has to exist at all because the refusals are silent — no movement and no
-     * NACK — so without a deadline a swap the body ignored would strand the zoom forever.
+     * NACK — so without a deadline a swap the body ignored would look like a slow one.
      */
     const val MED_TELE_SWAP_TIMEOUT_MS = 2_000L
 
@@ -98,11 +96,9 @@ object CamFov {
      * floor to its own ceiling, which is 2×…4× on a Pocket 3.
      *
      * 1× is deliberately absent, because a *zoom* cannot reach it: the camera clamps a
-     * wider ask back to the floor, so the tap would go nowhere. That holds only while the
-     * app is stuck with the lens the body is wearing — when it may take Med-Tele off the
-     * caller reaches for [SWAP_STOPS] instead and never gets here, which is why this is
-     * checked second. Null when Med-Tele is off or the body has not reported its limits
-     * yet, and the caller keeps the per-FORMAT table.
+     * wider ask back to the floor, so the tap would go nowhere. Getting back to 1× is the
+     * MT button's job — taking the lens off — not a stop. Null when Med-Tele is off or the
+     * body has not reported its limits yet, and the caller keeps the per-FORMAT table.
      */
     fun medTeleStops(lensMin: Int, lensMax: Int): List<Double>? {
         if (!isMedTele(lensMin)) return null
@@ -115,17 +111,11 @@ object CamFov {
     }
 
     /**
-     * Whether a chip tap may swap the lens itself, instead of only cropping what the
-     * body has already chosen.
+     * Whether the MT button may take the Pocket 3's Med-Tele lens on or off right now.
      *
-     * [seen] is the only honest evidence the body owns a second lens: nothing announces
-     * the feature — no `camcap_*` key, and `0x02/0x80` `@57` never moves — so the caller
-     * flips it true the first time this session the reported floor rises above [LENS_1X].
-     * Before that, offering the swap would be a guess about the hardware.
-     *
-     * The other three are the states where the swap was measured not to work, each a
-     * *silent* refusal — the body neither moves nor NACKs — so offering it there would
-     * spend a tap on nothing:
+     * These are the states where the swap was measured not to work, each a *silent*
+     * refusal — the body neither moves nor NACKs — so the button is dimmed there instead
+     * of spending a tap on nothing:
      * - colour must be Normal; in D-Log M the SET was ignored for 4 s. (On a Pocket 3
      *   `parseColorMode` only ever yields Normal or D-Log M for the 8/10-bit pair, so
      *   this one constant covers both.)
@@ -137,54 +127,12 @@ object CamFov {
      *
      * ActiveTrack is deliberately *not* here. The swap works with a track running — it is
      * the subject that does not survive it — so the caller clears tracking itself rather
-     * than hiding a stop that the body would honour.
+     * than dimming a button the body would honour.
      */
-    fun medTeleSwappable(
-        seen: Boolean,
-        colorMode: Int,
-        isRecording: Boolean,
-        shootingMode: Int,
-    ): Boolean =
-        seen &&
-            colorMode == CameraCommands.COLOR_NORMAL &&
+    fun medTeleToggleable(colorMode: Int, isRecording: Boolean, shootingMode: Int): Boolean =
+        colorMode == CameraCommands.COLOR_NORMAL &&
             !isRecording &&
             shootingMode == CameraCommands.SHOOT_VIDEO
-
-    /**
-     * The chip cycle once 1× means "take the second lens off" rather than "crop wider".
-     *
-     * Whole stops 1…4 in every FORMAT, because the reach no longer comes from the
-     * FORMAT's digital budget: 3× and 4× are the Med-Tele 2× with 1.5× and 2× of crop on
-     * top, and the body's ceiling under Med-Tele is a flat 868 however it is shooting.
-     * A FORMAT that caps digital zoom at 2× therefore still reaches 4× here.
-     */
-    val SWAP_STOPS: List<Double> = listOf(1.0, 2.0, 3.0, 4.0)
-
-    /**
-     * What a chip tap on a [SWAP_STOPS] target has to put on the wire.
-     *
-     * [swapTo] is null when the body already wears the right lens and this is an ordinary
-     * zoom. [lens] is null when the swap alone lands the operator on the target: the body
-     * parks exactly on the new floor each way — 217 coming out, 434 going in — so a bare
-     * 1× or 2× needs no zoom SET behind it, which is also what makes those two taps fast.
-     */
-    data class MedTelePlan(val swapTo: Boolean?, val lens: Int?)
-
-    /**
-     * Read [MedTelePlan] off the target and the body's reported floor.
-     *
-     * Anything above 1× wants the second lens, because 2× *is* the lens and 3×/4× are
-     * crops of it. Order matters for the caller: a lens SET that overtakes the swap is
-     * clamped to the old window — 868 would land as 434 at 4K — so [lens] must wait until
-     * the body reports the new floor, not merely until the swap is ACKed.
-     */
-    fun medTelePlan(target: Double, lensMin: Int): MedTelePlan {
-        val want = displayTenths(target) > MIN_FACTOR + 0.05
-        val lens = lensPosition(target)
-        if (want == isMedTele(lensMin)) return MedTelePlan(null, lens)
-        val park = if (want) LENS_MED_TELE else LENS_1X
-        return MedTelePlan(want, lens.takeIf { abs(it - park) > 1 })
-    }
 
     fun factor(raw: Int): Double {
         if (raw == 0) return MIN_FACTOR

@@ -68,6 +68,11 @@ class MonitorFeedbackPolicyTest {
         assertNull(MonitorZoomCaption.opticalTele(listOf(1.0)))
         assertTrue(MonitorZoomCaption.isOpticalTele(2.0, listOf(1.0, 2.0)))
         assertFalse(MonitorZoomCaption.isOpticalTele(2.0, listOf(1.0)))
+        // Med-Tele 3×/4× are still the tele lens, cropped: TELE stays, the number goes amber.
+        assertTrue(MonitorZoomCaption.isOnTeleLens(2.0, listOf(1.0, 2.0)))
+        assertTrue(MonitorZoomCaption.isOnTeleLens(4.0, listOf(1.0, 2.0)))
+        assertFalse(MonitorZoomCaption.isOnTeleLens(1.0, listOf(1.0, 2.0)))
+        assertFalse(MonitorZoomCaption.isOnTeleLens(4.0, listOf(1.0)))
         assertFalse(MonitorZoomCaption.isDigital(1.0, listOf(1.0, 3.0)))
         assertFalse(MonitorZoomCaption.isDigital(3.0, listOf(1.0, 3.0)))
         assertTrue(MonitorZoomCaption.isDigital(6.0, listOf(1.0, 3.0)))

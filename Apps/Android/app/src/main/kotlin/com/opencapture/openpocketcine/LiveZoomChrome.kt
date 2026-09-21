@@ -123,8 +123,9 @@ fun LiveZoomChip(
     }
     val digital = MonitorZoomCaption.isDigital(held, opticalStops)
     // A second lens reads as a bare number otherwise, indistinguishable from a crop that
-    // lands on the same factor. Name it, so the operator knows the detail is real.
-    val tele = MonitorZoomCaption.isOpticalTele(held, opticalStops)
+    // lands on the same factor. Name it for as long as it is in front — cropped too, when
+    // the amber number says the rest is digital.
+    val tele = MonitorZoomCaption.isOnTeleLens(held, opticalStops)
     Box(
         modifier
             .fillMaxSize()
@@ -135,7 +136,12 @@ fun LiveZoomChip(
                     { haptics.longPress(); dialBase = dialFactor; dialOpen = true }
                 } else null)
             .semantics {
-                val optics = if (digital) ", digital crop" else if (tele) ", tele lens" else ""
+                val optics = when {
+                    tele && digital -> ", tele lens, digital crop"
+                    digital -> ", digital crop"
+                    tele -> ", tele lens"
+                    else -> ""
+                }
                 val extra = if (onDigitalCycle != null) "; double tap for digital zoom" else ""
                 contentDescription =
                     "Zoom ${LiveZoom.label(held)}$optics. Tap to cycle; hold to adjust$extra"
