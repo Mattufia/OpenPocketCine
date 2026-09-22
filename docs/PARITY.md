@@ -725,8 +725,7 @@ Verification: **physical Android**, 2026-09-21 (Pocket 3, Galaxy S23 Ultra,
 debug build, live UDP): the operator drove MT on and off, watched the fade over
 the swap. The swap-frame timings above come from on-device logs of the same
 runs. Those runs had the button beside FIT; it has since moved to the zoom row,
-which the operator has seen in landscape. **The portrait zoom-row placement is
-built and unit-tested but not yet seen on a device.**
+which the operator has checked on the same phone in portrait and landscape.
 **iOS is not verified**:
 this project has no Mac to build it and no iPhone to run it. The iOS port is
 written against the same core and must be built and proven on a device before
