@@ -728,15 +728,13 @@ this project has no Mac to build it and no iPhone to run it. The iOS port is
 written against the same core and must be built and proven on a device before
 it counts.
 
-### Android-only chrome fixes (2026-09-21)
+### Android assist palette over inspectors (2026-09-21)
 
-Found while proving the MT button; each is recorded here because it does not
-touch iOS.
+Found while proving the MT button; recorded here because it does not touch iOS.
 
 | Fix | Why iOS is not changed |
 | --- | --- |
 | The assist cluster hides while the capture drawer or a gimbal panel is open (`MonitorAssistCluster(inspectorOpen:)`) | On Android the assist palette is a Compose `Popup`, its own window above every inspector. SwiftUI draws the palette in the view tree, under the inspector |
-| The portrait gimbal side panel takes its content's height (`MonitorInspector(fitContent:)`), not a fixed share of the screen | iOS has the same fixed height (`MonitorInspector`: 52% of a portrait viewport). Fitting it means measuring a `ScrollView`'s content, which cannot be built or checked here. **Open for iOS** |
 
 ### Pocket 3 optical stops per body (2026-09-21)
 

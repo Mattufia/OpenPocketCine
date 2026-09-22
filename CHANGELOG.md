@@ -315,7 +315,7 @@ separate iOS and Android lists.
   4×. Modes that lock digital zoom keep the optical 2× base. The optical/digital
   boundary is now read from the body's reported stops instead of assuming 3×.
 - Android: the assist palette no longer floats over the capture drawer or the
-  gimbal panel, and the portrait gimbal panel is only as tall as its content.
+  gimbal panel.
 - A Pocket 3 without Med-Tele no longer captions its 2.7K 3× as TELE. That 3×
   is a crop, and it now gets the digital-crop warning like any other. Which
   stops are optical is decided per body: on a Pocket 3 that is only the Med-Tele
