@@ -291,6 +291,8 @@ separate iOS and Android lists.
 
 ### Fixed
 
+- Android: the portrait gimbal panel is only as tall as its content instead of
+  a fixed, mostly empty half of the screen.
 - Both shells can recover an established live feed after the decoder loses its
   video format while compressed frames keep arriving. The existing watchdog
   still owns the single repair and bounded escalation; startup and grace gates
