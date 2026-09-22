@@ -501,7 +501,7 @@ public enum Commands {
     ///
     /// Silently ignored — no movement, no NACK — while recording and in any colour
     /// mode but Normal. Accepted with ActiveTrack running, but the subject is lost.
-    /// Gate callers on `CamFov.medTeleSwappable`.
+    /// Gate callers on `CamFov.medTeleToggleable`.
     public static func setMedTele(_ on: Bool, seq: UInt16 = 0) -> Duml.Frame {
         camera(0xFF, [0x00, 0x15, 0x00, on ? 0x0D : 0x01, 0x00, 0x00, 0x00], seq: seq)
     }

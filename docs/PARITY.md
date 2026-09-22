@@ -664,59 +664,79 @@ far-left stop and centred at 3.00×, confirming a 2…4 scale; the operator drov
 a drag end to end. Physical iOS verification remains pending: no iPhone is
 available to this project.
 
-### Pocket 3 Med-Tele in the chip cycle (2026-09-21)
+### Pocket 3 Med-Tele button (2026-09-21)
 
 The range fix above gave Med-Tele an honest 2 / 3 / 4 cycle, but it left the
-operator having to leave the app to get back to the wide lens. The 1× the cycle
-dropped was unreachable only because the app could not take the lens off — and
-it can: the `0x02/0xFF` SET is
+operator having to leave the app to get back to the wide lens. The app can take
+the lens off: the `0x02/0xFF` SET is
 [measured in both directions](../handbook/src/content/docs/devices/pocket-3/controls.md#driving-med-tele-from-the-app-2026-09-21).
 
-So the cycle is symmetric again — **1 → 2 → 3 → 4 → 1** — and the two ends mean
-the lens rather than a crop: 1× takes Med-Tele off, 2× puts it on. 3× and 4×
-are digital crops stacked on the 2× optical base, unchanged. `CamFov.swapStops`
-is that cycle; `CamFov.medTelePlan` decides, for a target and the reported
-floor, whether a swap is needed and which lens position (if any) has to follow
-it.
+A first cut put the swap in the chip cycle (1 → 2 → 3 → 4 → 1, the ends meaning
+the lens). On the body it read wrong: a chip stop that is sometimes a crop and
+sometimes a lens change, and a dial that had to stop reading the cycle to stay
+honest. The swap now has its own control and the cycle only ever crops inside
+the lens the body is wearing.
 
-The swap is offered only when all four hold — `CamFov.medTeleSwappable`:
+- **MT button**, portrait, FIT's twin on its leading side. With it showing, the
+  MT/FIT pair is centred rather than FIT (`portraitAspect(withMedTele:)` /
+  `portraitMedTele` on Android, `aspectToggleBesideMedTele` / `medTeleToggle`
+  on iOS). Shown for bodies that own the lens (`CameraModel.hasMedTele`: Pocket 3
+  and its Muse twin), accent while on.
+- **Dimmed, not hidden**, where the body silently ignores the swap —
+  `CamFov.medTeleToggleable`: colour Normal, not recording, Video mode. A tap
+  there says why (`Med-Tele — stop recording first`, `— not in D-Log M`,
+  `— Video mode only`) instead of spending a SET on nothing.
+- **Every swap lands on the lens's base** — 2× on, 1× off — never a crop of it.
+  Across a swap the body keeps the *crop*, not the factor, so a crop is taken
+  off first (lens SET to the current lens's base) and the swap is queued behind
+  it: released by the status push showing the base, or after 1.5 s.
+- **The picture fades to black** over the swap: 100 ms out, 160 ms back in. The
+  body's lens change is a visible jump and zoom. The fade ends at the first of:
+  the swap frame spotted in the feed plus 50 ms, the reported floor moving plus
+  60 ms, or a 3.5 s safety net. The swap frame is one access unit ≥ 1.4× and
+  ≥ 8 kB over the running median, 95–450 ms after the SET; parameter sets,
+  keyframes and the picture after parameter sets never count. Android has it in
+  `HevcDecoder.watchForLensSwap`; iOS uses the core's `LensSwapWatch`, with
+  unit tests.
+- **Taps during a swap are queued, not dropped.** The button follows the latest
+  tap at once; when the swap in flight lands, the session sends the last wanted
+  state or, if the body is already there, fades back in.
+- A swap straight off the base goes out immediately (the body takes over 100 ms
+  to cut, longer than the fade); one that has a crop to take off first waits for
+  black.
+- The body refuses silently, so success is the reported floor moving within
+  `CamFov.medTeleSwapTimeout` (2 s); otherwise `Med-Tele didn't switch`.
+- ActiveTrack survives the send but its subject does not, so both shells clear
+  tracking on the swap, the way a tap-to-focus does.
+- The chip keeps **TELE** across the whole tele lens (`isOnTeleLens`), so
+  Med-Tele 4× (the 2× lens cropped 2×) never reads like the same 4× cropped out
+  of the wide lens; the number still turns digital-crop amber.
 
-| Gate | Why |
+Cross-language vectors: `medTeleToggleable` in
+`Tests/Fixtures/camfov-vectors.tsv`. The superseded `medTeleSwappable`,
+`medTelePlan` and `zoomStopsSwap` kinds are gone with the design.
+
+The session wiring has no unit test on either side: no Android harness
+constructs a `PocketCameraSession`, and the iOS `CameraSession` is the same.
+The shared fixture and `LensSwapWatch` cover the pure logic.
+
+Verification: **physical Android**, 2026-09-21 (Pocket 3, Galaxy S23 Ultra,
+debug build, live UDP): the operator drove MT on and off, watched the fade over
+the swap, and checked the centred MT/FIT pair. The swap-frame timings above come
+from on-device logs of the same runs. **iOS is not verified**:
+this project has no Mac to build it and no iPhone to run it. The iOS port is
+written against the same core and must be built and proven on a device before
+it counts.
+
+### Android-only chrome fixes (2026-09-21)
+
+Found while proving the MT button; each is recorded here because it does not
+touch iOS.
+
+| Fix | Why iOS is not changed |
 | --- | --- |
-| The body has shown a floor above 217 at least once | Nothing announces the lens; the raised floor is the only evidence it exists. Sticky: taking the lens off must not take away the tap that puts it back |
-| `colorMode == normal` | The body ignores the swap in D-Log M. On a Pocket 3 `parseColorMode` only ever yields normal or D-Log M — `COLOR_NORMAL10` is Nano-only — so one test covers the 8- and 10-bit pair |
-| Not recording | The body ignores the swap while recording |
-| Shooting mode is Video | SlowMo / TimeLapse / SuperNight were never probed, so the swap stays out of them rather than being assumed into them |
-
-Two consequences had to be handled rather than discovered later:
-
-- **The zoom waits for the lens.** A lens SET that overtakes the swap is clamped
-  to the *old* window. `pendingZoomAfterSwap` holds the 3× / 4× write until the
-  reported floor actually moves, with `CamFov.medTeleSwapTimeout` (2 s) behind
-  it because the refusals are silent — measured under 1 s in both directions.
-- **The dial stops reading the cycle.** Once the swap is in it, `zoomStops`
-  describes *both* lenses and can no longer bound a pinch, which only ever crops
-  inside the lens that is on. While the swap is available `zoomMin` / `zoomMax`
-  read `cam_lens_state` directly, and `zoomOpticalStops` asks the body which
-  lens it is wearing instead of reading the cycle's floor. No other camera's
-  behaviour changes: every one of these paths falls back to the cycle.
-
-ActiveTrack survives the send but its subject does not — the body accepts the
-swap and silently orphans the track — so both shells clear tracking on the swap,
-the way a tap-to-focus does, rather than letting the idle poll notice seconds
-later.
-
-Cross-language vectors: `medTeleSwappable`, `medTelePlan` and `zoomStopsSwap`
-in `Tests/Fixtures/camfov-vectors.tsv`, including Pocket 4 Pro and Nano rows
-that prove the flag cannot reach another body's cycle.
-
-The session wiring itself has no unit test on either side: no Android harness
-constructs a `PocketCameraSession`. The shared fixture covers the pure logic in
-both languages; the wiring is covered by the physical run.
-
-Verification: core and shell unit tests both sides. **Physical Android is
-pending** — this section is not done until the cycle is driven on the Pocket 3.
-Physical iOS remains pending as before: no iPhone is available to this project.
+| The assist cluster hides while the capture drawer or a gimbal panel is open (`MonitorAssistCluster(inspectorOpen:)`) | On Android the assist palette is a Compose `Popup`, its own window above every inspector. SwiftUI draws the palette in the view tree, under the inspector |
+| The portrait gimbal side panel takes its content's height (`MonitorInspector(fitContent:)`), not a fixed share of the screen | iOS has the same fixed height (`MonitorInspector`: 52% of a portrait viewport). Fitting it means measuring a `ScrollView`'s content, which cannot be built or checked here. **Open for iOS** |
 
 ### Pocket 3 optical stops per body (2026-09-21)
 

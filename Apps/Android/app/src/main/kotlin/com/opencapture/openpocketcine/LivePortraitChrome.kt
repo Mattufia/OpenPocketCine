@@ -164,8 +164,8 @@ fun fillAssistRail(
     return ChromeRect(feed.minX + edge, y, width, height)
 }
 
-fun portraitAspectToggle(viewportWidth: Float, floorY: Float): ChromeRect {
-    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitAspect(viewportWidth, floorY)
+fun portraitAspectToggle(viewportWidth: Float, floorY: Float, withMedTele: Boolean = false): ChromeRect {
+    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitAspect(viewportWidth, floorY, withMedTele)
     return ChromeRect(frame.x, frame.y, frame.width, frame.height)
 }
 
@@ -239,7 +239,8 @@ fun LivePortraitChrome(
     val stick = cluster.stick
     val zoom = cluster.zoom
     val gimbalButton = cluster.controls
-    val toggle = portraitAspectToggle(layout.viewportWidth, floorY)
+    val showsMedTele = editing == null && model.session.connectedCamera?.model?.hasMedTele == true
+    val toggle = portraitAspectToggle(layout.viewportWidth, floorY, withMedTele = showsMedTele)
     val medTeleFrame = portraitMedTeleToggle(layout.viewportWidth, floorY)
     val rail = portraitAssistToolbar(floorY, tablet)
 
@@ -310,6 +311,8 @@ fun LivePortraitChrome(
                     portrait = true, locked = uiLocked || !chromeInteractive,
                     isOn = assist::isOn, onToggle = { assist.toggle(it) }, onLongPress = onAssistLongPress,
                     showsAudio = CaptureShutterPolicy.showsAudioControls(status.shootingMode),
+                    // The palette is a Popup, over every menu: it steps aside while one is open.
+                    inspectorOpen = captureOpen || model.liveGimbalPanel != LiveGimbalPanel.NONE,
                 )
             }
         }
@@ -364,9 +367,10 @@ fun LivePortraitChrome(
             )
         }
 
-        if (editing == null && model.session.connectedCamera?.model?.hasMedTele == true) {
+        if (showsMedTele && !captureOpen) {
             val medTeleAsked by model.session.medTeleAsked.collectAsState()
-            val medTeleOn = medTeleAsked ?: (status.zoomLensMin >= 0 && CamFov.isMedTele(status.zoomLensMin))
+            val medTeleWanted by model.session.medTeleWanted.collectAsState()
+            val medTeleOn = medTeleWanted ?: medTeleAsked ?: (status.zoomLensMin >= 0 && CamFov.isMedTele(status.zoomLensMin))
             val medTeleReady = !uiLocked &&
                 CamFov.medTeleToggleable(status.colorMode, status.isRecording, status.shootingMode)
             LivePortraitMedTeleToggle(

@@ -46,6 +46,11 @@ struct MonitorZoomTapStopsTests {
         #expect(MonitorZoomCaption.opticalTele([1]) == nil)
         #expect(MonitorZoomCaption.isOpticalTele(factor: 2, opticalStops: [1, 2]))
         #expect(!MonitorZoomCaption.isOpticalTele(factor: 2, opticalStops: [1]))
+        // Med-Tele 3x/4x are still the tele lens, cropped: TELE stays, the number goes amber.
+        #expect(MonitorZoomCaption.isOnTeleLens(factor: 2, opticalStops: [1, 2]))
+        #expect(MonitorZoomCaption.isOnTeleLens(factor: 4, opticalStops: [1, 2]))
+        #expect(!MonitorZoomCaption.isOnTeleLens(factor: 1, opticalStops: [1, 2]))
+        #expect(!MonitorZoomCaption.isOnTeleLens(factor: 4, opticalStops: [1]))
         #expect(!MonitorZoomCaption.isDigital(factor: 2, opticalStops: [1, 2]))
         #expect(!MonitorZoomCaption.isDigital(factor: 1, opticalStops: [1, 3]))
         #expect(!MonitorZoomCaption.isDigital(factor: 3, opticalStops: [1, 3]))

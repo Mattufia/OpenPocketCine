@@ -161,6 +161,14 @@ struct FieldMonitorLayoutTests {
         #expect(layout.stick.y > layout.picture.maxY)
         #expect(layout.aspectToggle.y > layout.picture.maxY)
         #expect(layout.aspectToggle.midX == layout.viewport.midX)
+        // With the Med-Tele button beside it the pair is centred, not FIT.
+        let fit = layout.aspectToggleBesideMedTele
+        let mt = layout.medTeleToggle
+        #expect(mt.y == fit.y && mt.width == fit.width)
+        #expect(mt.maxX == fit.x - 8)
+        #expect((mt.x + fit.maxX) / 2 == layout.viewport.midX)
+        #expect(mt.x > layout.assists.maxX)
+        #expect(fit.maxX < layout.stick.x)
         #expect(layout.assists.maxY == layout.stick.maxY)
         #expect(layout.zoom.maxY < layout.stick.y)
         #expect(layout.stick.x == layout.viewport.width - 104)

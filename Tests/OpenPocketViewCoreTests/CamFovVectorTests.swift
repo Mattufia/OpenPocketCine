@@ -52,8 +52,7 @@ import Testing
                 "factorRaw", "factorLens", "lensPosition", "displayLabel", "displayTenths",
                 "matches", "nextJump", "previousJump", "stopWithinCycle", "pocket3ZoomMax",
                 "sizeTitle", "activeZoomStops", "medTeleStops", "zoomStopsLens",
-                "ceilingNote", "medTeleSwappable", "medTelePlan", "zoomStopsSwap",
-                "opticalStops",
+                "ceilingNote", "medTeleToggleable", "opticalStops",
             ])
     }
 
@@ -137,30 +136,12 @@ import Testing
                 let got = CamFov.ceilingNote(
                     size: row[1], held: Double(row[2]) ?? 0, stops: Self.list(row[3]))
                 #expect((got ?? "-") == want, "ceilingNote \(row[1]) \(row[2])")
-            case "medTeleSwappable":
-                let got = CamFov.medTeleSwappable(
-                    seen: row[1] == "1",
-                    colorMode: ColorMode(rawValue: UInt8(row[2]) ?? 0xFF),
-                    isRecording: row[3] == "1",
-                    shootingMode: Int(row[4]) ?? -1)
-                #expect(got == (want == "1"), "medTeleSwappable \(row[1]) \(row[2]) \(row[4])")
-            case "medTelePlan":
-                let plan = CamFov.medTelePlan(
-                    target: Double(row[1]) ?? 0, lensMin: UInt16(row[2]) ?? 0)
-                let swap = plan.swapTo.map { $0 ? "on" : "off" } ?? "-"
-                let lens = plan.lens.map { "\($0)" } ?? "-"
-                #expect("\(swap)/\(lens)" == want, "medTelePlan \(row[1]) \(row[2])")
-            case "zoomStopsSwap":
-                let model = CameraModel(name: row[1])
-                let got = model.activeZoomStops(
-                    resolution: Self.resolution(row[3]), shootingMode: Int(row[4]) ?? -1,
-                    lensMin: UInt16(row[5]), lensMax: UInt16(row[6]),
-                    medTeleSwappable: row[7] == "1")
-                let expected = Self.list(want)
-                #expect(got.count == expected.count, "zoomStopsSwap \(row[1]) \(row[7])")
-                for (a, b) in zip(got, expected) {
-                    #expect(Self.close(a, b), "zoomStopsSwap \(row[1]) \(row[7])")
-                }
+            case "medTeleToggleable":
+                let got = CamFov.medTeleToggleable(
+                    colorMode: ColorMode(rawValue: UInt8(row[1]) ?? 0xFF),
+                    isRecording: row[2] == "1",
+                    shootingMode: Int(row[3]) ?? -1)
+                #expect(got == (want == "1"), "medTeleToggleable \(row[1]) \(row[2]) \(row[3])")
             case "opticalStops":
                 let got = CameraModel(name: row[1]).opticalZoomStops(
                     cycle: Self.list(row[3]), lensMin: UInt16(row[4]))

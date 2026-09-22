@@ -17,6 +17,16 @@ public enum MonitorZoomCaption {
         return abs(factor - tele) < 0.05
     }
 
+    /// True while the second lens is in front, cropped or not: at the optical
+    /// tele and past it, where every factor is that lens plus digital zoom. The
+    /// chip keeps TELE up across the whole range so the operator can tell
+    /// Med-Tele 4x (the 2x lens, cropped 2x) from the same 4x cropped out of the
+    /// wide lens — `isDigital` still colours the number.
+    public static func isOnTeleLens(factor: Double, opticalStops: [Double]) -> Bool {
+        guard let tele = opticalTele(opticalStops), factor.isFinite else { return false }
+        return factor > tele - 0.05
+    }
+
     public static func label(factor: Double, opticalStops: [Double]) -> String {
         guard factor.isFinite else { return "WIDE" }
         if abs(factor - 1) < 0.05 { return "WIDE" }

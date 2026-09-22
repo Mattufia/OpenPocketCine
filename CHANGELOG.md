@@ -17,6 +17,14 @@ separate iOS and Android lists.
 
 ### Added
 
+- Pocket 3 **MT** button, beside FIT in portrait: takes Med-Tele, the body's 2×
+  lens, on and off without leaving the app. Every tap lands on the lens's base,
+  2× or 1×, taking any digital crop off first. The picture fades to black over
+  the swap and comes back when the new lens shows in the feed. Taps during a
+  swap are queued. The button is dimmed where the camera would silently ignore
+  it: while recording, in D-Log M, and outside Video mode. The zoom chip keeps
+  **TELE** across the whole tele lens, crops included. Proven on Android with a
+  Pocket 3; not yet verified on iOS.
 - Anamorphic Desqueeze (**DE-SQ**) on iOS and Android: live view, video playback
   and photo viewing share 1.1×, 1.2×, 1.33×, 1.5×, 1.6×, 1.8× and 2.0× presets,
   plus a remembered Custom factor from 1.00× to 2.00× in 0.01 steps. Horizontal
@@ -306,6 +314,8 @@ separate iOS and Android lists.
   crop. Digital zoom keeps composing on top, so 2× optical with 2× digital reads
   4×. Modes that lock digital zoom keep the optical 2× base. The optical/digital
   boundary is now read from the body's reported stops instead of assuming 3×.
+- Android: the assist palette no longer floats over the capture drawer or the
+  gimbal panel, and the portrait gimbal panel is only as tall as its content.
 - A Pocket 3 without Med-Tele no longer captions its 2.7K 3× as TELE. That 3×
   is a crop, and it now gets the digital-crop warning like any other. Which
   stops are optical is decided per body: on a Pocket 3 that is only the Med-Tele

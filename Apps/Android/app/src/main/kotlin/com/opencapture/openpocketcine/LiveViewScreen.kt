@@ -575,6 +575,28 @@ fun LiveViewScreen(model: AppModel) {
             }
             }
 
+            // An MT swap runs behind black: the body's lens change is not pretty.
+            val medTeleBlackout by model.session.medTeleBlackout.collectAsState()
+            val blackout by animateFloatAsState(
+                if (medTeleBlackout) 1f else 0f,
+                tween(
+                    if (medTeleBlackout) {
+                        com.opencapture.openpocketcine.session.PocketCameraSession.MED_TELE_BLACKOUT_MS.toInt()
+                    } else {
+                        com.opencapture.openpocketcine.session.PocketCameraSession.MED_TELE_FADE_IN_MS.toInt()
+                    },
+                ),
+                label = "medTeleBlackout",
+            )
+            if (blackout > 0f) {
+                Box(
+                    Modifier
+                        .liveModuleFrame(if (desqueezeVisible) pictureContent else layout.onFeed)
+                        .graphicsLayer { alpha = blackout }
+                        .background(Color.Black),
+                )
+            }
+
             // Passive source geometry; this box draws and captures nothing.
             Box(Modifier.liveModuleFrame(layout.onFeed).monitorBackdropSource(backdrop.source,
                 imageRect = androidx.compose.ui.geometry.Rect(
@@ -1444,6 +1466,8 @@ internal fun LandscapeChrome(
                     portrait = false, locked = uiLocked || !hits,
                     isOn = assist::isOn, onToggle = { assist.toggle(it) }, onLongPress = onAssistLongPress,
                     showsAudio = CaptureShutterPolicy.showsAudioControls(status.shootingMode),
+                    // The palette is a Popup, over every menu: it steps aside while one is open.
+                    inspectorOpen = captureOpen || model.liveGimbalPanel != LiveGimbalPanel.NONE,
                 )
             }
         }

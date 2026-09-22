@@ -186,10 +186,11 @@ class MonitorLayoutPolicyTest {
     fun medTeleSitsBesideFitClearOfTheStickAndAssists() {
         for (width in listOf(320f, 360f, 393f, 440f, 744f)) {
             val floor = 700f
-            val fit = MonitorLayoutPolicy.portraitAspect(width, floor)
+            val fit = MonitorLayoutPolicy.portraitAspect(width, floor, withMedTele = true)
             val mt = MonitorLayoutPolicy.portraitMedTele(width, floor)
             assertEquals(fit.y, mt.y, .01f)
             assertEquals(fit.x - 8f, mt.maxX, .01f)
+            assertEquals(width / 2f, (mt.x + fit.maxX) / 2f, .01f)
             assertTrue(MonitorLayoutPolicy.portraitAssists(floor, width >= 600f).maxX < mt.x)
             assertTrue(fit.maxX < MonitorLayoutPolicy.portraitStick(width, floor).x)
         }

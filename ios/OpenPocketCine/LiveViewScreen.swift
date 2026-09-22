@@ -247,6 +247,19 @@ struct LiveViewScreen: View {
                 LiveFeedWarmupCover()
                     .frame(width: layout.onFeed.width, height: layout.onFeed.height)
                     .offset(x: layout.onFeed.minX, y: layout.onFeed.minY)
+                // An MT swap runs behind black: the body's lens change is not pretty.
+                let blackout = model.session.medTeleBlackout
+                Color.black
+                    .frame(width: layout.onFeed.width, height: layout.onFeed.height)
+                    .offset(x: layout.onFeed.minX, y: layout.onFeed.minY)
+                    .opacity(blackout ? 1 : 0)
+                    .animation(
+                        .easeInOut(
+                            duration: Double(
+                                blackout ? CameraSession.medTeleBlackoutMs : CameraSession.medTeleFadeInMs)
+                                / 1000),
+                        value: blackout)
+                    .allowsHitTesting(false)
             }
             .frame(
                 width: layout.viewport.width,
@@ -476,13 +489,25 @@ struct LiveViewScreen: View {
             if let p = layout.presentation, p.portrait {
                 LiveDesign.background.frame(width: p.system.width, height: p.system.height)
                     .position(x: p.system.midX, y: p.system.midY).allowsHitTesting(false)
+                let showsMedTele =
+                    editingMode == nil && model.session.connectedCamera?.model.hasMedTele == true
                 if !model.session.decoder.isVerticalPicture, editingMode == nil,
                     !model.assist.isVisible(.desqueeze)
                 {
                     LivePortraitAspectToggle(aspect: Bindable(model).portraitFeedAspect)
                         .accessibilityHidden(!liveChromeVisible || zoomDialMounted)
-                        .liveModuleFrame(p.aspectToggle.cgRect)
+                        .liveModuleFrame(
+                            (showsMedTele ? p.aspectToggleBesideMedTele : p.aspectToggle).cgRect)
                         .allowsHitTesting(!interfaceLocked)
+                }
+                if showsMedTele {
+                    LivePortraitMedTeleToggle(
+                        on: model.session.medTeleShown,
+                        enabled: model.session.medTeleToggleable
+                    ) { model.session.toggleMedTele() }
+                    .accessibilityHidden(!liveChromeVisible || zoomDialMounted)
+                    .liveModuleFrame(p.medTeleToggle.cgRect)
+                    .allowsHitTesting(!interfaceLocked)
                 }
             }
 

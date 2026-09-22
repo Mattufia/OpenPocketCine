@@ -152,18 +152,33 @@ object MonitorLayoutPolicy {
         return MonitorRect(x, top, cardWidth, min(MEDIA_FILTER_PREFERRED_HEIGHT, maxHeight))
     }
 
-    fun portraitAspect(width: Float, floor: Float): MonitorRect =
-        MonitorRect(max(0f, width) / 2f - 24f, max(0f, floor - 56f), 48f, 48f)
+    /**
+     * FIT, centred; with the Med-Tele button beside it ([withMedTele]) the pair is centred
+     * instead, so FIT sits half a slot to the trailing side.
+     */
+    fun portraitAspect(width: Float, floor: Float, withMedTele: Boolean = false): MonitorRect {
+        val shift = if (withMedTele) (ASPECT_SIZE + ASPECT_GAP) / 2f else 0f
+        return MonitorRect(
+            max(0f, width) / 2f - ASPECT_SIZE / 2f + shift,
+            max(0f, floor - 56f),
+            ASPECT_SIZE,
+            ASPECT_SIZE,
+        )
+    }
 
     /**
-     * The Pocket 3 Med-Tele button: FIT's twin, one slot to its leading side. Leading
-     * because trailing is where the gimbal stick sits, which reaches the middle on a
-     * narrow phone; leading only has the assists rail, which ends well short of it.
+     * The Pocket 3 Med-Tele button: FIT's twin, one slot to its leading side, the pair
+     * centred together. Leading because trailing is where the gimbal stick sits, which
+     * reaches the middle on a narrow phone; leading only has the assists rail, which ends
+     * well short of it.
      */
     fun portraitMedTele(width: Float, floor: Float): MonitorRect {
-        val fit = portraitAspect(width, floor)
-        return MonitorRect(fit.x - fit.width - 8f, fit.y, fit.width, fit.height)
+        val fit = portraitAspect(width, floor, withMedTele = true)
+        return MonitorRect(fit.x - fit.width - ASPECT_GAP, fit.y, fit.width, fit.height)
     }
+
+    private const val ASPECT_SIZE = 48f
+    private const val ASPECT_GAP = 8f
 
     /** FieldMonitorLayout portrait stick / zoom / gimbal. */
     fun portraitStick(width: Float, floor: Float): MonitorRect =

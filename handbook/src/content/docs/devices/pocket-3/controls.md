@@ -140,6 +140,35 @@ Not probed, and so not claimed: SlowMo, TimeLapse and SuperNight; HLG; and
 whether enabling Med-Tele clamps ISO to the 1600 ceiling the exposure menu
 shows. Each needs one run, not an argument.
 
+Two more behaviours matter to anything that swaps the lens:
+
+- **The body keeps the crop, not the factor.** Swapping with a digital crop on
+  carries that crop onto the new lens. To land on the new lens's base, take the
+  crop off first (a lens SET to the current base) and send the swap once the
+  status shows it.
+- **The cut is visible in the stream.** The body jumps and zooms through the
+  change, and the frame where the lens cuts over is one access unit well above
+  its neighbours, about 110–140 ms after the SET. The new lens is the picture
+  after it. The status push reporting the new floor comes 220–600 ms after the
+  SET, so the stream is the earlier signal.
+
+The apps put the swap on an **MT** button next to FIT, run it behind a short
+fade to black, and use that frame to fade back in — see
+[the MT button](#the-mt-button-in-the-apps).
+
+### The MT button in the apps
+
+| | |
+| --- | --- |
+| Where | Portrait live view, beside FIT; the pair is centred |
+| When | Pocket 3 only. Dimmed while recording, in D-Log M, and outside Video mode |
+| What a tap does | 2× lens base on, 1× wide lens off. Never a crop of either |
+| While it runs | The picture fades to black and back; further taps change where it ends up |
+| If the body refuses | `Med-Tele didn't switch` after 2 s |
+
+The zoom chip keeps cycling crops inside whichever lens is on: 2× / 3× / 4× with
+Med-Tele, the FORMAT's own stops without.
+
 ## Gimbal controls
 
 The Video monitor's gimbal popup contains separate **mode** and **rotational

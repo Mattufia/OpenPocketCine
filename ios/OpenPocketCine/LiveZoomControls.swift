@@ -310,10 +310,13 @@ struct LiveZoomChip: View {
     /// A second lens reads as a bare number otherwise, indistinguishable from a
     /// crop that lands on the same factor. Name it, so the operator knows the
     /// detail is real.
+    /// Held across a crop of that lens too, so Med-Tele 4x (the 2x lens, cropped
+    /// 2x) never reads like the same 4x cropped out of the wide lens.
     private var isOpticalTele: Bool {
-        MonitorZoomCaption.isOpticalTele(factor: displayFactor, opticalStops: opticalStops)
+        MonitorZoomCaption.isOnTeleLens(factor: displayFactor, opticalStops: opticalStops)
     }
     private var zoomAccessibilityLabel: String {
+        if isOpticalTele, isDigitalCrop { return "Zoom \(title), tele lens, digital crop" }
         if isDigitalCrop { return "Zoom \(title), digital crop" }
         if isOpticalTele { return "Zoom \(title), tele lens" }
         return "Zoom \(title)"

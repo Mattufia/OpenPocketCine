@@ -210,7 +210,10 @@ space after rotation or resizing, including saved positions. Long-press a View A
   With **Med-Tele** on, that ceiling does not apply: the chip cycles
   **2×/3×/4×** and marks the 2× base **TELE**, because it is the second lens
   rather than a crop. Digital zoom composes on top of it — 2× optical plus 2×
-  digital reads 4×.
+  digital reads 4×. In portrait an **MT** button beside FIT takes Med-Tele on
+  and off, behind a short fade to black
+  ([details](https://openpocketcine.app/docs/devices/pocket-3/controls/#the-mt-button-in-the-apps));
+  not yet verified on an iPhone.
   Zoom must not drop the live picture. FORMAT lists
   `camcap_video_format` pairs (2.7K / 4:3 / 1:1 / 9:16 when the body
   advertises them; aspect is the res byte). A tap stays on that pair until
