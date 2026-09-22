@@ -57,23 +57,6 @@ public struct FieldMonitorLayout: Equatable, Sendable {
     /// Compass Head Lock control, trailing-aligned above the stick/zoom cluster.
     public let headTrack: MonitorRect
     public let aspectToggle: MonitorRect
-    /// FIT with the Pocket 3 Med-Tele button beside it: the pair is centred
-    /// instead, so FIT sits half a slot to the trailing side.
-    public var aspectToggleBesideMedTele: MonitorRect {
-        var r = aspectToggle
-        r.x += (aspectToggle.width + Self.aspectGap) / 2
-        return r
-    }
-    /// The Pocket 3 Med-Tele button: FIT's twin, one slot to its leading side.
-    /// Leading because trailing is where the gimbal stick sits, which reaches the
-    /// middle on a narrow phone; leading only has the assists rail, which ends
-    /// well short of it.
-    public var medTeleToggle: MonitorRect {
-        var r = aspectToggleBesideMedTele
-        r.x -= r.width + Self.aspectGap
-        return r
-    }
-    static let aspectGap = 8.0
     public let focusReset: MonitorRect
     public let portrait: Bool
     public let tablet: Bool

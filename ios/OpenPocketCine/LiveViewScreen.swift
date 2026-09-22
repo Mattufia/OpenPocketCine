@@ -489,25 +489,13 @@ struct LiveViewScreen: View {
             if let p = layout.presentation, p.portrait {
                 LiveDesign.background.frame(width: p.system.width, height: p.system.height)
                     .position(x: p.system.midX, y: p.system.midY).allowsHitTesting(false)
-                let showsMedTele =
-                    editingMode == nil && model.session.connectedCamera?.model.hasMedTele == true
                 if !model.session.decoder.isVerticalPicture, editingMode == nil,
                     !model.assist.isVisible(.desqueeze)
                 {
                     LivePortraitAspectToggle(aspect: Bindable(model).portraitFeedAspect)
                         .accessibilityHidden(!liveChromeVisible || zoomDialMounted)
-                        .liveModuleFrame(
-                            (showsMedTele ? p.aspectToggleBesideMedTele : p.aspectToggle).cgRect)
+                        .liveModuleFrame(p.aspectToggle.cgRect)
                         .allowsHitTesting(!interfaceLocked)
-                }
-                if showsMedTele {
-                    LivePortraitMedTeleToggle(
-                        on: model.session.medTeleShown,
-                        enabled: model.session.medTeleToggleable
-                    ) { model.session.toggleMedTele() }
-                    .accessibilityHidden(!liveChromeVisible || zoomDialMounted)
-                    .liveModuleFrame(p.medTeleToggle.cgRect)
-                    .allowsHitTesting(!interfaceLocked)
                 }
             }
 
@@ -573,13 +561,10 @@ struct LiveViewScreen: View {
                         captureControlsPresented || !liveChromeVisible || zoomDialMounted
                     )
                     .zIndex(2)
-                if layout.presentation?.portrait != true, editingMode == nil,
-                    model.session.connectedCamera?.model.hasMedTele == true
-                {
+                if editingMode == nil, model.session.connectedCamera?.model.hasMedTele == true {
                     LivePortraitMedTeleToggle(
                         on: model.session.medTeleShown,
-                        enabled: model.session.medTeleToggleable,
-                        size: GimbalCluster.medTeleSize
+                        enabled: model.session.medTeleToggleable
                     ) { model.session.toggleMedTele() }
                     .liveModuleFrame(Self.cgRect(self.gimbalCluster(layout).medTele))
                     .opacity(captureControlsPresented ? 0 : 1)

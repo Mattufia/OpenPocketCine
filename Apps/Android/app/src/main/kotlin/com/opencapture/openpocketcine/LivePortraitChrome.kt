@@ -164,13 +164,8 @@ fun fillAssistRail(
     return ChromeRect(feed.minX + edge, y, width, height)
 }
 
-fun portraitAspectToggle(viewportWidth: Float, floorY: Float, withMedTele: Boolean = false): ChromeRect {
-    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitAspect(viewportWidth, floorY, withMedTele)
-    return ChromeRect(frame.x, frame.y, frame.width, frame.height)
-}
-
-fun portraitMedTeleToggle(viewportWidth: Float, floorY: Float): ChromeRect {
-    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitMedTele(viewportWidth, floorY)
+fun portraitAspectToggle(viewportWidth: Float, floorY: Float): ChromeRect {
+    val frame = com.opencapture.monitorui.MonitorLayoutPolicy.portraitAspect(viewportWidth, floorY)
     return ChromeRect(frame.x, frame.y, frame.width, frame.height)
 }
 
@@ -240,8 +235,7 @@ fun LivePortraitChrome(
     val zoom = cluster.zoom
     val gimbalButton = cluster.controls
     val showsMedTele = editing == null && model.session.connectedCamera?.model?.hasMedTele == true
-    val toggle = portraitAspectToggle(layout.viewportWidth, floorY, withMedTele = showsMedTele)
-    val medTeleFrame = portraitMedTeleToggle(layout.viewportWidth, floorY)
+    val toggle = portraitAspectToggle(layout.viewportWidth, floorY)
     val rail = portraitAssistToolbar(floorY, tablet)
 
     Box(Modifier.fillMaxSize()) {
@@ -367,9 +361,6 @@ fun LivePortraitChrome(
             )
         }
 
-        if (showsMedTele && !captureOpen) {
-            LiveMedTeleToggle(model, status, uiLocked, medTeleFrame)
-        }
 
         if (!captureOpen && capabilities.zoom && model.chromeSectionMounts(PocketDispSection.ZOOM_CHIP)) {
             val zoomReadout by model.session.zoomReadout.collectAsState()
@@ -404,6 +395,7 @@ fun LivePortraitChrome(
                 onDial = model.session::updateZoomPinch,
                 onDialEnd = model.session::endZoomPinch,
             )
+            if (showsMedTele) LiveMedTeleToggle(model, status, uiLocked, cluster.medTele)
         }
 
         if (!captureOpen && showGimbalButton && !gimbalButton.isEmpty) {

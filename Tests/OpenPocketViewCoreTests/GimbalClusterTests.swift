@@ -35,6 +35,19 @@ import Testing
         #expect(cluster.medTele == MonitorLayoutRegion(x: 556, y: 256, width: 36, height: 36))
     }
 
+    @Test func portraitMedTeleClearsTheAssistsAndFit() {
+        // A 320-wide portrait Field Monitor, floor 700: stick w-104 / floor-104,
+        // zoom and gimbal button on the row above, FIT at floor-56, assists
+        // ending at x 60.
+        let stick = MonitorLayoutRegion(x: 216, y: 596, width: 88, height: 88)
+        let zoom = MonitorLayoutRegion(x: 216, y: 552, width: 44, height: 36)
+        let controls = MonitorLayoutRegion(x: 268, y: 552, width: 36, height: 36)
+        let mt = GimbalCluster(stick: stick, zoom: zoom, controls: controls).medTele
+        #expect(mt == MonitorLayoutRegion(x: 172, y: 552, width: 36, height: 36))
+        #expect(mt.x > 60)
+        #expect(mt.maxY < 644)
+    }
+
     @Test func medTeleSitsLeadingOfZoomWithTheGimbalButtonOn() {
         let cluster = GimbalCluster.inTrailingBottom(
             well: well, floorY: 330, canvasMaxY: canvasMaxY, showGimbalButton: true)

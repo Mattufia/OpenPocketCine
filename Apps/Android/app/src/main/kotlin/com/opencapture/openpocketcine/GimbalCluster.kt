@@ -37,9 +37,9 @@ data class GimbalCluster(
         }
 
     /**
-     * Pocket 3 Med-Tele (MT) button in landscape: one circle leading of the zoom
-     * row, the chip and the gimbal button being that row. Landscape has no FIT key
-     * to sit beside, and the lens is the zoom chip's business.
+     * Pocket 3 Med-Tele (MT) button: one circle leading of the zoom row, the chip
+     * and the gimbal button being that row. The lens is the zoom chip's business,
+     * so the key sits with it in both orientations.
      */
     val medTele: ChromeRect
         get() {

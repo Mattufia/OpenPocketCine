@@ -1,6 +1,6 @@
 New and changed
 
-- Pocket 3: an MT button beside FIT in portrait turns Med-Tele, the 2× lens, on and off. The picture fades to black while the lens swaps.
+- Pocket 3: an MT button beside the zoom chip turns Med-Tele, the 2× lens, on and off. The picture fades to black while the lens swaps.
 - Anamorphic Desqueeze (DE-SQ) works in live view, video playback and photos. Choose a lens preset or a custom 1.00–2.00× factor in 0.01 steps.
 
 Fixes

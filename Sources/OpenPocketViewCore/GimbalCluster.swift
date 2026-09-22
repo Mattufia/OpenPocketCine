@@ -21,9 +21,9 @@ public struct GimbalCluster: Equatable, Sendable {
     /// The Med-Tele button's circle, the size of the gimbal-controls button.
     public static let medTeleSize = 36.0
 
-    /// Pocket 3 Med-Tele (MT) button in landscape: one circle leading of the
-    /// zoom row, the chip and the gimbal button being that row. Landscape has
-    /// no FIT key to sit beside, and the lens is the zoom chip's business.
+    /// Pocket 3 Med-Tele (MT) button: one circle leading of the zoom row, the
+    /// chip and the gimbal button being that row. The lens is the zoom chip's
+    /// business, so the key sits with it in both orientations.
     public var medTele: MonitorLayoutRegion {
         var leading = zoom.x
         if controls.width > 1, abs(controls.midY - zoom.midY) < 1 {

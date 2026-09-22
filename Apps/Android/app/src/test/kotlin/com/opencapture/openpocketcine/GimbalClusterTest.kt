@@ -86,6 +86,20 @@ class GimbalClusterTest {
     }
 
     @Test
+    fun portraitMedTeleClearsTheAssistsAndFit() {
+        val policy = com.opencapture.monitorui.MonitorLayoutPolicy
+        for (width in listOf(320f, 360f, 393f, 440f, 744f)) {
+            val floor = 700f
+            fun r(m: com.opencapture.monitorui.MonitorRect) = ChromeRect(m.x, m.y, m.width, m.height)
+            val stick = policy.portraitStick(width, floor)
+            val zoom = policy.portraitZoom(stick)
+            val mt = GimbalCluster(r(stick), r(zoom), r(policy.portraitGimbal(stick, zoom))).medTele
+            assertTrue(policy.portraitAssists(floor, width >= 600f).maxX < mt.minX)
+            assertTrue(mt.maxY < policy.portraitAspect(width, floor).y)
+        }
+    }
+
+    @Test
     fun medTeleSitsLeadingOfZoomWithTheGimbalButtonOn() {
         val cluster = GimbalCluster.inTrailingBottom(
             well, floorY = 330f, canvasMaxY = canvasMaxY, showGimbalButton = true,

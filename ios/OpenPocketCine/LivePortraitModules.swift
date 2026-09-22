@@ -105,14 +105,12 @@ struct LivePortraitRecOptionsButton: View {
     }
 }
 
-/// Pocket 3 Med-Tele quick key, FIT's twin. Dimmed where the body would ignore
+/// Pocket 3 Med-Tele quick key, leading of the zoom chip. Dimmed where the body would ignore
 /// the swap — see `CamFov.medTeleToggleable` — but still tappable, so the tap
 /// says why.
 struct LivePortraitMedTeleToggle: View {
     let on: Bool
     let enabled: Bool
-    /// 40 beside FIT in portrait; the gimbal button's 36 on the landscape zoom row.
-    var size: CGFloat = 40
     let action: () -> Void
 
     var body: some View {
@@ -120,7 +118,7 @@ struct LivePortraitMedTeleToggle: View {
             Text("MT")
                 .font(LiveType.ui(size: 9, weight: .bold))
                 .foregroundStyle(on ? LiveDesign.accent : LiveDesign.text)
-                .frame(width: size, height: size)
+                .frame(width: GimbalCluster.medTeleSize, height: GimbalCluster.medTeleSize)
                 .background(.black.opacity(0.55), in: Circle())
                 .overlay(
                     Circle().strokeBorder(on ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1))
