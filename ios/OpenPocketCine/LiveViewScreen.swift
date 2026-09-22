@@ -573,6 +573,22 @@ struct LiveViewScreen: View {
                         captureControlsPresented || !liveChromeVisible || zoomDialMounted
                     )
                     .zIndex(2)
+                if layout.presentation?.portrait != true, editingMode == nil,
+                    model.session.connectedCamera?.model.hasMedTele == true
+                {
+                    LivePortraitMedTeleToggle(
+                        on: model.session.medTeleShown,
+                        enabled: model.session.medTeleToggleable,
+                        size: GimbalCluster.medTeleSize
+                    ) { model.session.toggleMedTele() }
+                    .liveModuleFrame(Self.cgRect(self.gimbalCluster(layout).medTele))
+                    .opacity(captureControlsPresented ? 0 : 1)
+                    .allowsHitTesting(!interfaceLocked && !captureControlsPresented)
+                    .accessibilityHidden(
+                        captureControlsPresented || !liveChromeVisible || zoomDialMounted
+                    )
+                    .zIndex(2)
+                }
             }
 
             if showsGimbalButton {

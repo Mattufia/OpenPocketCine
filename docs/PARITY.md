@@ -682,6 +682,10 @@ the lens the body is wearing.
   `portraitMedTele` on Android, `aspectToggleBesideMedTele` / `medTeleToggle`
   on iOS). Shown for bodies that own the lens (`CameraModel.hasMedTele`: Pocket 3
   and its Muse twin), accent while on.
+- **In landscape** there is no FIT, so MT sits on the zoom row above the gimbal
+  stick, leading of the zoom chip, the gimbal button's size
+  (`GimbalCluster.medTele` in both shells, unit-tested on each). It follows the
+  zoom chip: shown when the chip is, hidden while capture controls are open.
 - **Dimmed, not hidden**, where the body silently ignores the swap —
   `CamFov.medTeleToggleable`: colour Normal, not recording, Video mode. A tap
   there says why (`Med-Tele — stop recording first`, `— not in D-Log M`,
@@ -723,7 +727,9 @@ The shared fixture and `LensSwapWatch` cover the pure logic.
 Verification: **physical Android**, 2026-09-21 (Pocket 3, Galaxy S23 Ultra,
 debug build, live UDP): the operator drove MT on and off, watched the fade over
 the swap, and checked the centred MT/FIT pair. The swap-frame timings above come
-from on-device logs of the same runs. **iOS is not verified**:
+from on-device logs of the same runs. That proof is portrait only: **the
+landscape placement is built and unit-tested but not yet seen on a device.**
+**iOS is not verified**:
 this project has no Mac to build it and no iPhone to run it. The iOS port is
 written against the same core and must be built and proven on a device before
 it counts.

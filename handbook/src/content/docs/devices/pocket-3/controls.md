@@ -160,7 +160,7 @@ fade to black, and use that frame to fade back in — see
 
 | | |
 | --- | --- |
-| Where | Portrait live view, beside FIT; the pair is centred |
+| Where | Portrait: beside FIT, the pair centred. Landscape: beside the zoom chip, on the row above the gimbal stick |
 | When | Pocket 3 only. Dimmed while recording, in D-Log M, and outside Video mode |
 | What a tap does | 2× lens base on, 1× wide lens off. Never a crop of either |
 | While it runs | The picture fades to black and back; further taps change where it ends up |

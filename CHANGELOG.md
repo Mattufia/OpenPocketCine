@@ -17,7 +17,8 @@ separate iOS and Android lists.
 
 ### Added
 
-- Pocket 3 **MT** button, beside FIT in portrait: takes Med-Tele, the body's 2×
+- Pocket 3 **MT** button, beside FIT in portrait and beside the zoom chip in
+  landscape: takes Med-Tele, the body's 2×
   lens, on and off without leaving the app. Every tap lands on the lens's base,
   2× or 1×, taking any digital crop off first. The picture fades to black over
   the swap and comes back when the new lens shows in the feed. Taps during a

@@ -1412,6 +1412,9 @@ internal fun LandscapeChrome(
                 onDial = model.session::updateZoomPinch,
                 onDialEnd = model.session::endZoomPinch,
             )
+            if (editing == null && model.session.connectedCamera?.model?.hasMedTele == true) {
+                LiveMedTeleToggle(model, status, uiLocked, GimbalCluster(stick, zoom, gimbalButton).medTele)
+            }
         }
         if (!captureOpen && capabilities.gimbal &&
             model.chromeSectionMounts(PocketDispSection.GIMBAL_STICK) &&

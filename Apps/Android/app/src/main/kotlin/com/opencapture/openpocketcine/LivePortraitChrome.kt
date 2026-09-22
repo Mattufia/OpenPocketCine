@@ -368,17 +368,7 @@ fun LivePortraitChrome(
         }
 
         if (showsMedTele && !captureOpen) {
-            val medTeleAsked by model.session.medTeleAsked.collectAsState()
-            val medTeleWanted by model.session.medTeleWanted.collectAsState()
-            val medTeleOn = medTeleWanted ?: medTeleAsked ?: (status.zoomLensMin >= 0 && CamFov.isMedTele(status.zoomLensMin))
-            val medTeleReady = !uiLocked &&
-                CamFov.medTeleToggleable(status.colorMode, status.isRecording, status.shootingMode)
-            LivePortraitMedTeleToggle(
-                on = medTeleOn,
-                enabled = !uiLocked,
-                modifier = Modifier.liveModuleFrame(medTeleFrame).alpha(if (medTeleReady) 1f else 0.4f),
-                onClick = { model.session.toggleMedTele() },
-            )
+            LiveMedTeleToggle(model, status, uiLocked, medTeleFrame)
         }
 
         if (!captureOpen && capabilities.zoom && model.chromeSectionMounts(PocketDispSection.ZOOM_CHIP)) {
@@ -627,6 +617,22 @@ fun LivePortraitSystemBar(
  * the note can say why — while recording, in D-Log M and outside Video mode, the states
  * where the body refuses the swap without a word.
  */
+/** The MT button with the session's state, wherever a chrome seats it. */
+@Composable
+fun LiveMedTeleToggle(model: AppModel, status: CameraStatus, uiLocked: Boolean, frame: ChromeRect) {
+    val medTeleAsked by model.session.medTeleAsked.collectAsState()
+    val medTeleWanted by model.session.medTeleWanted.collectAsState()
+    val medTeleOn = medTeleWanted ?: medTeleAsked ?: (status.zoomLensMin >= 0 && CamFov.isMedTele(status.zoomLensMin))
+    val medTeleReady = !uiLocked &&
+        CamFov.medTeleToggleable(status.colorMode, status.isRecording, status.shootingMode)
+    LivePortraitMedTeleToggle(
+        on = medTeleOn,
+        enabled = !uiLocked,
+        modifier = Modifier.liveModuleFrame(frame).alpha(if (medTeleReady) 1f else 0.4f),
+        onClick = { model.session.toggleMedTele() },
+    )
+}
+
 @Composable
 fun LivePortraitMedTeleToggle(on: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(

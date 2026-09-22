@@ -111,6 +111,8 @@ struct LivePortraitRecOptionsButton: View {
 struct LivePortraitMedTeleToggle: View {
     let on: Bool
     let enabled: Bool
+    /// 40 beside FIT in portrait; the gimbal button's 36 on the landscape zoom row.
+    var size: CGFloat = 40
     let action: () -> Void
 
     var body: some View {
@@ -118,7 +120,7 @@ struct LivePortraitMedTeleToggle: View {
             Text("MT")
                 .font(LiveType.ui(size: 9, weight: .bold))
                 .foregroundStyle(on ? LiveDesign.accent : LiveDesign.text)
-                .frame(width: 40, height: 40)
+                .frame(width: size, height: size)
                 .background(.black.opacity(0.55), in: Circle())
                 .overlay(
                     Circle().strokeBorder(on ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1))
