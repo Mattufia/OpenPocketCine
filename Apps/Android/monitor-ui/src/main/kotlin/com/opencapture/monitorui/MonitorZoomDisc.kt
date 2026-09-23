@@ -20,7 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -112,7 +112,7 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
     val minZoom = minimum.takeIf { it.isFinite() && it > 0.0 }?.coerceAtMost(maxZoom) ?: 1.0
     val initialValue = initial.takeIf { it.isFinite() }?.coerceIn(minZoom, maxZoom) ?: minZoom
     var position by remember {
-        mutableFloatStateOf(MonitorZoomScale.position(initialValue, minZoom, maxZoom).toFloat())
+        mutableDoubleStateOf(MonitorZoomScale.position(initialValue, minZoom, maxZoom))
     }
     var entering by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
@@ -161,19 +161,18 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
     val radius = disc.radius
     val pixelDisc = MonitorZoomGeometry(
         radius * density.density, disc.edgeExtension * density.density, disc.attachment)
-    val factor = MonitorZoomScale.valueAt(position.toDouble(), minZoom, maxZoom)
+    val factor = MonitorZoomScale.valueAt(position, minZoom, maxZoom)
     val optical = opticalStops.any { abs(it - factor) < .05 }
     val accent = if (optical) MonitorPalette.accent else MonitorPalette.digitalCrop
     val textMeasurer = rememberTextMeasurer()
-    fun update(next: Float) {
+    fun update(next: Double, accessibility: Boolean = false) {
         if (!next.isFinite() || closing) return
-        val unconstrained = MonitorZoomScale.quantized(
-            MonitorZoomScale.valueAt(next.toDouble(), minZoom, maxZoom), minZoom, maxZoom)
-        val current = MonitorZoomScale.quantized(
-            MonitorZoomScale.valueAt(position.toDouble(), minZoom, maxZoom), minZoom, maxZoom)
-        val factor = MonitorZoomScale.slowSnap(unconstrained, current, minZoom, maxZoom)
+        val requested = MonitorZoomScale.valueAt(next, minZoom, maxZoom)
+        val current = MonitorZoomScale.valueAt(position, minZoom, maxZoom)
+        val factor =
+            if (accessibility) MonitorZoomScale.quantized(requested, minZoom, maxZoom) else requested
         if (MonitorDialHaptic.shouldTick(current, factor, MonitorZoomScale.wholeStops)) detent()
-        position = MonitorZoomScale.position(factor, minZoom, maxZoom).toFloat()
+        position = MonitorZoomScale.position(factor, minZoom, maxZoom)
         send(factor)
     }
     val provider = remember { object : PopupPositionProvider {
@@ -206,15 +205,15 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
                 .monitorMaterial(MonitorMaterial.Zoom, MonitorZoomDiscShape(attachment))) {
                 Canvas(Modifier.fillMaxSize().semantics {
                     contentDescription = "Zoom ${MonitorZoomScale.dialLabel(factor, minZoom, maxZoom)}"
-                    progressBarRangeInfo = ProgressBarRangeInfo(position, 0f..1f)
-                    setProgress { update(it); true }
+                    progressBarRangeInfo = ProgressBarRangeInfo(position.toFloat(), 0f..1f)
+                    setProgress { update(it.toDouble(), accessibility = true); true }
                     customActions = listOf(CustomAccessibilityAction("Close zoom") { closing = true; true })
                 }.pointerInput(pixelDisc) {
                     detectTapGestures { if (!pixelDisc.contains(it.x, it.y)) closing = true }
                 }.pointerInput(geometry, closing) {
                     if (closing) return@pointerInput
                     var radial: MonitorZoomRadialGesture? = null
-                    var startPosition = 0f
+                    var startPosition = 0.0
                     var dragging = false
                     try {
                         detectDragGestures(
@@ -236,7 +235,7 @@ fun MonitorZoomDisc(initial: Double, maximum: Double, label: (Double) -> String,
                         ) { change, _ ->
                             change.consume()
                             if (dragging) radial?.angleDelta(change.position.x, change.position.y)?.let { delta ->
-                                update(startPosition - (delta / (210 * PI / 180)).toFloat())
+                                update(startPosition - delta / MonitorZoomScale.ANGULAR_SPAN)
                             }
                         }
                     } finally {

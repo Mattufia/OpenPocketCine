@@ -1,14 +1,17 @@
 New and changed
 
 - Pocket 3: an MT button beside the zoom chip turns Med-Tele, the 2× lens, on and off. The picture fades to black while the lens swaps.
-- Anamorphic Desqueeze (DE-SQ) works in live view, video playback and photos. Choose a lens preset or a custom 1.00–2.00× factor in 0.01 steps.
+- On Osmo Nano, zoom is hidden: no zoom chip, pinch zoom, hold disc or controller zoom. DISP settings list Zoom Chip and Gimbal Stick only when the camera has them.
+- Osmo Action 6 support: live view, Normal 10-bit and D-Log M color with the official LUT, and an APERTURE control in place of FOCUS. Not yet checked on a real Action 6.
 
 Fixes
 
 - Pocket 3: with Med-Tele on, the zoom chip offers 2×, 3× and 4×, and a 3× crop is no longer labelled as a lens.
-- Improved recovery when a running preview loses its video format.
+- Live video no longer stops shortly after connecting while the app is busy.
+- In Auto exposure, SHUTTER shows the shutter the camera actually applied.
 
 What to test
 
 - Pocket 3: tap MT from 1× and from a digital crop, then tap it quickly several times. Check it lands on 2× or 1× and is dimmed while recording or in D-Log M.
-- Tap DE-SQ to toggle; hold for presets, Custom and direction. Try LUT, grids, rotation and playback zoom. Check your custom factor survives a restart and files remain unchanged.
+- Connect a Nano: check there is no zoom chip and that pinch and controller L1/R1 and L2/R2 do not zoom. Switch to a Pocket and check zoom returns.
+- If you have an Action 6: pair it, confirm live view appears, then try APERTURE, COLOR, Photo and Timelapse.
