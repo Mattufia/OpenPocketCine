@@ -159,6 +159,13 @@ timing and counters only; no picture, audio, camera credentials or device identi
   keeps moving is not a drop and a picture lost once is reported once, one window
   late. These legs follow one picture across one hop; they do not add up to a
   glass-to-glass figure and do not reach physical scanout.
+  Stall forensics close the line: `irap` and `ps` count cumulative IRAP and
+  parameter-set-only access units admitted since the datalink reset; `gate` is
+  `await` while admission drops non-key AUs after an incomplete loss
+  (`gateDrops` counts only those, not overflow trims or loss flushes);
+  `dec=cfg,hold,surface` is the decoder's configured,
+  random-access-hold and presentation-surface state. With `au>0` and `submit=0`,
+  a flat `irap` means the camera cut no IDR; a climbing one means the app dropped it.
   While the session is live, cadence windows still close during Media browsing
   even though their reports and live recovery remain suppressed. This retires
   unmatched frame stamps if decoding continues without presentation.

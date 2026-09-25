@@ -21,6 +21,7 @@ Fixes
 
 What to test
 
+- If Live View freezes while the camera stays connected, note the time and send Connection setup → Share Diagnostics: it now includes more detail about the stall.
 - Open Multiview with two or more cameras: record the group, switch Grid and Center stage, double-tap a tile, then close and connect one camera normally.
 - Turn on LEVEL and roll the handle in FPV: the roll meter should move with the picture. With Double-tap set to Level, angle the handle forward and double-tap.
 - In Media, open a clip, tap the trash icon, and try Cancel, then Delete.

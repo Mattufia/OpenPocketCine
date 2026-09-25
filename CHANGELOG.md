@@ -22,6 +22,9 @@ All notable changes to this project are documented here. The format is based on
   55% less for the whole phone. Sideload build 0.1.5 (2) carries it. A `perf` build type and
   `just android-perf-soak` make the measurement repeatable
   ([Android pass](docs/audits/2026-09-24-android-perf-pass.md)).
+- Android `feed: cadence` diagnostics now log IRAP and parameter-set counts,
+  the admission gate state and the decoder's configured, hold and surface state,
+  to help narrow down which gate stops decoding when Live View freezes.
 
 ### Fixed
 

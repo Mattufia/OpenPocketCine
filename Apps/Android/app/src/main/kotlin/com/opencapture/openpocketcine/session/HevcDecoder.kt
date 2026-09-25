@@ -40,6 +40,7 @@ class HevcDecoder internal constructor(
         private set
     internal val randomAccess = DecoderRandomAccessHold()
     val awaitingIdr: Boolean get() = randomAccess.awaitingIdr
+    val isConfigured: Boolean get() = configured
     val hasDecodableReferences: Boolean get() = randomAccess.hasDecodableReferences
     val referenceRecoveryNeeded: Boolean get() = synchronized(lock) { randomAccess.referenceRecoveryNeeded }
     var nalTypesSeen = ""

@@ -1081,7 +1081,12 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                             withContext(Dispatchers.IO) {
                                 DiagnosticCenter.log("info", "feed", "cadence",
                                     "${cadence.format(lineWindow)} incomplete=${datalink?.droppedIncomplete ?: 0} " +
-                                        "errors=${decoder.decoderErrors.get()} phase=${_phase.value.name.lowercase()}")
+                                        "errors=${decoder.decoderErrors.get()} phase=${_phase.value.name.lowercase()} " +
+                                        "irap=${datalink?.admissionIrapSeen ?: 0} ps=${datalink?.admissionParameterSetsSeen ?: 0} " +
+                                        "gate=${if (datalink?.admissionAwaitingRandomAccess == true) "await" else "open"} " +
+                                        "gateDrops=${datalink?.admissionGateDrops ?: 0} " +
+                                        "dec=cfg:${decoder.isConfigured},hold:${decoder.awaitingIdr}," +
+                                        "surface:${decoder.isPresentationReady}")
                             }
                         }
                         recoverLiveViewIfNeeded()

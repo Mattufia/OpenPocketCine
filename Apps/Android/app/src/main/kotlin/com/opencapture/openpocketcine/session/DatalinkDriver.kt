@@ -318,6 +318,10 @@ class DatalinkDriver internal constructor(
     val pendingAccessUnits: Int get() = admission.pendingCount
     val pendingAccessUnitBytes: Int get() = admission.queuedBytes
     val admissionDrops: Int get() = admission.drops
+    val admissionIrapSeen: Int get() = admission.irapSeen
+    val admissionParameterSetsSeen: Int get() = admission.parameterSetsSeen
+    val admissionGateDrops: Int get() = admission.gateDrops
+    val admissionAwaitingRandomAccess: Boolean get() = admission.isAwaitingRandomAccess
     val lastVideoPacketAt: Long? get() = lastVideoElapsed.get().takeIf { it > 0 }
     val lastStatusAt: Long? get() = lastStatusElapsed.get().takeIf { it > 0 }
     val lastAccessUnitAt: Long? get() = lastAccessUnitElapsed.get().takeIf { it > 0 }
