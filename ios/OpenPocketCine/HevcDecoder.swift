@@ -305,6 +305,7 @@ final class HevcDecoder {
         return result
     }
     private var lastDecodedTimeNs: Int64 = 0
+    private var decodedImageFormat: CMVideoFormatDescription?
     private var lastPresentHealthLogAt: Date?
     private var builtVPS: [UInt8]?
     private var builtSPS: [UInt8]?
@@ -1008,6 +1009,7 @@ final class HevcDecoder {
             lastDecodedBuffer = result.source
             lastDecodedTimeNs = result.timeNs
             onSourceFrame?(result.source)
+            NotificationCenter.default.post(name: .monitorBackdropSourceAdvanced, object: nil)
         }
         if !result.shouldPresent { return false }
         var presentedIdentity = false
@@ -1400,14 +1402,24 @@ final class HevcDecoder {
     ) -> Bool {
         guard commitPictureFlipIfNeeded() else { return false }
         guard Self.isPresentable(imageBuffer) else { return false }
-        var format: CMVideoFormatDescription?
-        guard
-            CMVideoFormatDescriptionCreateForImageBuffer(
-                allocator: kCFAllocatorDefault,
-                imageBuffer: imageBuffer,
-                formatDescriptionOut: &format) == noErr,
-            let format
-        else { return false }
+        // VT output keeps one size and color tagging per session; reuse its description.
+        let format: CMVideoFormatDescription
+        if let cached = decodedImageFormat,
+            CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: imageBuffer)
+        {
+            format = cached
+        } else {
+            var created: CMVideoFormatDescription?
+            guard
+                CMVideoFormatDescriptionCreateForImageBuffer(
+                    allocator: kCFAllocatorDefault,
+                    imageBuffer: imageBuffer,
+                    formatDescriptionOut: &created) == noErr,
+                let created
+            else { return false }
+            decodedImageFormat = created
+            format = created
+        }
 
         frameIndex += 1
         var timing = LiveViewPresentTiming.sampleTiming(frameIndex: frameIndex)

@@ -59,7 +59,7 @@ enum WiFiJoiner {
             let current = await currentSSID()
             try Task.checkCancellation()
             if let foreign = CameraSoftAPSwitch.ssidToKick(
-                currentSSID: current, target: ssid)
+                currentSSID: current, target: ssid, knownCameraSSIDs: knownOtherSSIDs)
             {
                 journal("wifi: kick \(foreign) then join \(ssid) #\(attempt)")
                 leave(ssid: foreign)
@@ -78,11 +78,15 @@ enum WiFiJoiner {
                 let now = await currentSSID()
                 try Task.checkCancellation()
                 if CameraSoftAPSwitch.isOnTarget(currentSSID: now, target: ssid) {
-                    journal("wifi: on \(ssid) (current=\(now ?? "nil")) #\(attempt)")
+                    journal("wifi: on \(ssid) (ssid=\(now ?? "nil")) #\(attempt)")
                     return
                 }
-                journal("wifi: still on \(now ?? "?") after join \(ssid) — retry")
-                if let now { leave(ssid: now) }
+                journal("wifi: still on ssid=\(now ?? "?") after join \(ssid) — retry")
+                if let now,
+                    CameraSoftAPSwitch.isCameraNetwork(now, knownCameraSSIDs: knownOtherSSIDs)
+                {
+                    leave(ssid: now)
+                }
                 lastError = JoinError.stillOnOtherBody(now ?? "other camera")
             } catch is CancellationError {
                 throw CancellationError()
@@ -181,7 +185,7 @@ enum WiFiJoiner {
         }
         let current = await currentSSID() ?? "nil"
         journal(
-            "wifi: no 192.168.2.x after \(Int(timeout)) s current=\(current) ipv4=\(ipv4Addresses().joined(separator: ","))"
+            "wifi: no 192.168.2.x after \(Int(timeout)) s ssid=\(current) ipv4=\(ipv4Addresses().joined(separator: ","))"
         )
         throw JoinError.pathNotReady
     }

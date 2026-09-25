@@ -114,6 +114,7 @@ import com.opencapture.openpocketcine.session.CameraCommands
 import com.opencapture.openpocketcine.session.CameraStatus
 import com.opencapture.openpocketcine.session.ControlHud
 import com.opencapture.openpocketcine.session.FocusOverlay
+import com.opencapture.openpocketcine.session.LiveFaceDetector
 import com.opencapture.openpocketcine.session.TrackingBox
 import com.opencapture.openpocketcine.session.VideoResolution
 import java.util.concurrent.atomic.AtomicBoolean
@@ -123,7 +124,7 @@ import kotlinx.coroutines.isActive
 
 @Composable
 fun LiveViewScreen(model: AppModel) {
-    val status by model.session.status.collectAsState()
+    val status by model.session.chromeStatus.collectAsState()
     val cameraGalleryOpen by model.session.cameraGalleryOpen.collectAsState()
     var followedGallery by remember { mutableStateOf(cameraGalleryOpen) }
     LaunchedEffect(cameraGalleryOpen) {
@@ -143,6 +144,7 @@ fun LiveViewScreen(model: AppModel) {
     val zoomPinching by model.session.zoomPinching.collectAsState()
     val trackingHud by model.session.trackingHud.collectAsState()
     val poseViewFlip by model.session.gimbalPoseViewFlip.collectAsState()
+    val poseInvertPan by model.session.gimbalPoseInvertPan.collectAsState()
     val gimbalLimitPulse by model.session.gimbalLimitPulse.collectAsState()
     val operatorHaptics = LocalOperatorHaptics.current
     var tick by remember { mutableIntStateOf(0) }
@@ -713,18 +715,34 @@ fun LiveViewScreen(model: AppModel) {
                 }
             }
 
-            if (assist.evMeter && model.currentDispMode == PocketDispMode.LIVE) {
-                val showsAssist = model.chromeSectionMounts(PocketDispSection.TOOL_BAR) &&
-                    model.liveOperatorPanel == null && assist.configureTool == null
-                val collapsedPalette = if (!showsAssist) null else if (zones != null) {
-                    portraitAssistToolbar(zones.assistToolbar.minY, minOf(vw, vh) >= 600f)
-                } else layout.assist
+            // EV and LEVEL share the left-edge slot and its View Assist toolbar avoidance.
+            val showsAssist = model.chromeSectionMounts(PocketDispSection.TOOL_BAR) &&
+                model.liveOperatorPanel == null && assist.configureTool == null
+            val collapsedPalette = if (!showsAssist) null else if (zones != null) {
+                portraitAssistToolbar(zones.assistToolbar.minY, minOf(vw, vh) >= 600f)
+            } else layout.assist
+            val meterAvoid = if (showsAssist) assistPaletteBounds ?: collapsedPalette else null
+            val meterFeed = if (desqueezeVisible) pictureContent else layout.onFeed
+            val evShown = assist.evMeter && model.currentDispMode == PocketDispMode.LIVE
+            if (evShown) {
                 LiveCameraExposureMeter(
                     raw = status.meteredEv,
                     available = !recovery.isRecovering && !model.session.isFeedRecovering,
-                    feed = if (desqueezeVisible) pictureContent else layout.onFeed,
+                    feed = meterFeed,
                     mode = model.currentDispMode,
-                    avoid = if (showsAssist) assistPaletteBounds ?: collapsedPalette else null,
+                    avoid = meterAvoid,
+                    modifier = Modifier.zIndex(1f),
+                )
+            }
+
+            if (assist.isVisible(LiveAssistTool.LEVEL)) {
+                LiveLevelOverlay(
+                    reading = model.session.levelReading,
+                    // Picture-relative like the stick: TT180 mirrors the shown picture in both Selfie Flip states.
+                    viewFlip = CameraCommands.liveInvertPan(poseInvertPan, assist.mirror),
+                    feed = meterFeed,
+                    viewport = ChromeRect(0f, 0f, vw, vh),
+                    portrait = portrait,
                     modifier = Modifier.zIndex(1f),
                 )
             }
@@ -734,7 +752,8 @@ fun LiveViewScreen(model: AppModel) {
                 textureView = glesTextureView,
                 feed = layout.onFeed,
                 enabled = wantsFaceDetect && hasPicture,
-                onFrame = { bmp -> model.session.considerFaceFrame(bmp) },
+                wantsFrame = model.session::wantsFaceFrame,
+                onFrame = { frame -> model.session.considerFaceFrame(frame) },
             )
             Box(Modifier.liveModuleFrame(layout.onFeed)) {
                 val subject = trackingHud.overlay as? FocusOverlay.Subject
@@ -982,30 +1001,34 @@ private fun LiveFaceFramePump(
     textureView: TextureView?,
     feed: ChromeRect,
     enabled: Boolean,
-    onFrame: (Bitmap) -> Unit,
+    wantsFrame: () -> Boolean,
+    onFrame: (LiveFaceDetector.Frame) -> Unit,
 ) {
     val density = LocalDensity.current
     val handler = remember { Handler(Looper.getMainLooper()) }
     val inFlight = remember { AtomicBoolean(false) }
     val latest = rememberUpdatedState(onFrame)
+    val wanted = rememberUpdatedState(wantsFrame)
     val vulkan = LocalGpuLive.current
     LaunchedEffect(surfaceView, textureView, vulkan, enabled, feed.x, feed.y, feed.width, feed.height) {
         if (!enabled) return@LaunchedEffect
-        val tapW = com.opencapture.openpocketcine.session.LiveFaceDetector.TAP_WIDTH
+        val tapW = LiveFaceDetector.TAP_WIDTH
         while (isActive) {
-            delay(com.opencapture.openpocketcine.session.LiveFaceDetector.INTERVAL_MS)
-            if (!inFlight.compareAndSet(false, true)) continue
+            delay(LiveFaceDetector.INTERVAL_MS)
             // Vulkan: identity 720p RGB, same space as iOS Vision / 0xA6.
             // PixelCopy of the swapchain is already mirrored when TT180/MIRROR
             // is on, and the overlay mirrors again — box on the opposite side.
             val session = vulkan
             if (session != null) {
-                session.requestFaceTap()
-                val src = session.takeFaceBitmap()
-                inFlight.set(false)
-                if (src != null) latest.value(src)
+                // Take a fresh readback first, then ask for the next only when the
+                // detector will use it (10 Hz idle pace skips the GPU readback too).
+                session.takeFaceNv21()?.let {
+                    latest.value(LiveFaceDetector.Frame.nv21(it, LiveFaceDetector.TAP_WIDTH, LiveFaceDetector.TAP_HEIGHT))
+                }
+                if (wanted.value()) session.requestFaceTap()
                 continue
             }
+            if (!wanted.value() || !inFlight.compareAndSet(false, true)) continue
             val tapH =
                 ((tapW * feed.height / feed.width.coerceAtLeast(1f)).toInt() and 1.inv())
                     .coerceAtLeast(16)
@@ -1013,7 +1036,7 @@ private fun LiveFaceFramePump(
             if (gles != null && gles.isAvailable) {
                 val src = gles.getBitmap(tapW, tapH)
                 inFlight.set(false)
-                if (src != null) latest.value(src)
+                if (src != null) latest.value(LiveFaceDetector.Frame.of(src))
                 continue
             }
             val view = surfaceView
@@ -1042,7 +1065,7 @@ private fun LiveFaceFramePump(
                     { result ->
                         inFlight.set(false)
                         if (result == PixelCopy.SUCCESS) {
-                            latest.value(dest)
+                            latest.value(LiveFaceDetector.Frame.of(dest))
                         } else {
                             dest.recycle()
                         }
@@ -1488,7 +1511,7 @@ internal fun LandscapeChrome(
                     enabled = !captureOpen && !uiLocked && model.liveOperatorPanel == null && hits,
                     onMove = model::updateGimbalStick,
                     onRelease = model::endGimbalStick,
-                    onRecenter = { model.session.recenterGimbal() },
+                    onRecenter = { model.session.performGimbalDoubleTap() },
                     onFlip = { model.session.flipGimbal() },
                 )
             }

@@ -10,6 +10,8 @@ import OpenPocketViewCore
     private var sequence: UInt16 = 1200
     private var approved = false
     private var closed = false
+    /// Sees every camera frame first (e.g. `07/AC` scan reports, whatever their flags).
+    var onFrame: ((Duml.Frame) -> Void)?
 
     func next() -> UInt16 {
         sequence &+= 1
@@ -49,6 +51,7 @@ import OpenPocketViewCore
         router = Task { [weak self] in
             for await frame in frames {
                 guard let self, !Task.isCancelled, !closed else { return }
+                onFrame?(frame)
                 if frame.cmdSet == 7, frame.cmdId == 0x46, frame.flags & 128 == 0 {
                     send(Commands.pairApprovalAck(seq: frame.seq))
                     approved = true
@@ -83,11 +86,72 @@ import OpenPocketViewCore
             }
         }
     }
+    /// Closes and returns once iOS reports the Bluetooth link down, so the next connect to
+    /// this camera from another link is not dropped with it.
+    func closeAndWait() async {
+        closed = true
+        keepalive?.cancel()
+        router?.cancel()
+        await ble.disconnectAndWait()
+        replies.removeAll()
+    }
+
     func close() {
         closed = true
         keepalive?.cancel()
         router?.cancel()
         ble.disconnect()
         replies.removeAll()
+    }
+}
+
+extension MultiviewProvisioner {
+    /// Networks the camera can see, reported as they arrive: Multiview's captured station
+    /// role, repeated `07/AB` scans and their `07/AC` reports, until `rounds` finish or the
+    /// caller cancels. `07/48 00` then returns the camera to its own Wi-Fi on the same link,
+    /// even after cancellation. The caller stamps the role change first.
+    static func scanNetworks(
+        _ camera: FoundCamera, rounds: Int = 4, onFound: @escaping @MainActor (String) -> Void
+    ) async throws {
+        let client = MultiviewProvisioner()
+        var seen = Set<String>()
+        client.onFrame = { frame in
+            guard frame.cmdSet == 7, frame.cmdId == 0xac, frame.sender == 7 else { return }
+            for name in MulticamWiFiScan.names(frame.payload) where seen.insert(name).inserted {
+                onFound(name)
+            }
+        }
+        var failure: Error?
+        do {
+            try await client.connect(camera, pairingTimeout: 30)
+            if camera.model.family == .nano {
+                _ = try await client.exchange(Commands.session5310(id: client.next()))
+            }
+            do {
+                let role = try await client.exchange(
+                    MulticamCommands.stationMode(true, seq: client.next()))
+                guard role.payload.first == 0 else { throw MultiviewSession.Failure.rejected }
+                try await Task.sleep(for: .seconds(10))
+                for _ in 0..<rounds {
+                    // A lost scan reply is not fatal; later rounds and reports still land.
+                    _ = try? await client.exchange(
+                        MulticamWiFiScan.request(seq: client.next()), timeout: 8)
+                    try await Task.sleep(for: .seconds(5))
+                }
+            } catch {
+                failure = error
+            }
+            // Its own task: a cancelled scan must still return the camera to its access point.
+            let back = await Task {
+                try? await client.exchange(MulticamCommands.stationMode(false, seq: client.next()))
+            }.value
+            ControlLiveLog.line(
+                "setup: camera scan found=\(seen.count) returned=\(back?.payload.first == 0)")
+        } catch {
+            failure = error
+        }
+        // Also its own task: the connect that follows must not share a dying link.
+        await Task { await client.closeAndWait() }.value
+        if let failure { throw failure }
     }
 }
