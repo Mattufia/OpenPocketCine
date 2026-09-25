@@ -51,6 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.TimeoutCancellationException
@@ -200,7 +201,17 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     val found: StateFlow<List<FoundCamera>> = ble.found
     val radioOn: StateFlow<Boolean> get() = ble.radioOn
     private val _status = MutableStateFlow(CameraStatus())
+
+    // Most DUML frames are not status frames and leave _status untouched, so its
+    // JSON for the Swift bridge is reused until the value changes.
+    private var statusJson: Pair<CameraStatus, String>? = null
+    /** Camera truth. Control code reads this; Compose collects [chromeStatus]. */
     val status: StateFlow<CameraStatus> = _status.asStateFlow()
+    private val _chromeStatus = MutableStateFlow(CameraStatus())
+    /** [status] at the 5 Hz HUD budget ([LiveChromeThrottle]); operator fields bypass. */
+    val chromeStatus: StateFlow<CameraStatus> = _chromeStatus.asStateFlow()
+    /** The last DUML telemetry write. Only it may wait for the HUD interval. */
+    private var telemetryStatus: CameraStatus? = null
 
     /**
      * The camera body shows its own gallery during an established live session.
@@ -211,6 +222,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     val cameraGalleryOpen: StateFlow<Boolean> = _cameraGalleryOpen.asStateFlow()
     private var cameraGalleryAwayTicks = 0
 
+    /** World level from the attitude quaternion; LEVEL polls it at 10 Hz. */
+    val levelReading = LevelReading()
     private val _controlNote = MutableStateFlow<String?>(null)
     val controlNote: StateFlow<String?> = _controlNote.asStateFlow()
 
@@ -265,6 +278,9 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     private var gimbalParamPoll = GimbalParamPoll()
     private var wasRecording = false
     var gimbalRamp: GimbalRamp = GimbalRamp.OFF
+    var gimbalDoubleTap: GimbalDoubleTap = GimbalDoubleTap.RECENTER
+    /** In-flight Double-tap Level move, judged on each attitude push. */
+    @Volatile private var worldLevelSnap: WorldLevelSnap? = null
     private val _gimbalMode = MutableStateFlow(GimbalMode.FOLLOW)
     val gimbalMode: StateFlow<GimbalMode> = _gimbalMode.asStateFlow()
     private val _gimbalSpeed = MutableStateFlow(GimbalSpeed.DEFAULT)
@@ -457,6 +473,17 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     val isReconnecting: StateFlow<Boolean> = _isReconnecting.asStateFlow()
 
     init {
+        scope.launch {
+            var publishedAt = 0L
+            _status.collectLatest { next ->
+                val shown = _chromeStatus.value
+                if (next == shown) return@collectLatest
+                delay(LiveChromeThrottle.holdMs(shown, next, next === telemetryStatus, publishedAt,
+                    SystemClock.elapsedRealtime()))
+                _chromeStatus.value = next
+                publishedAt = SystemClock.elapsedRealtime()
+            }
+        }
         ble.onLinkLost = {
             if (_phase.value == ConnectionPhase.LIVE || holdsMonitor) {
                 beginSessionRecovery("BLE dropped", SessionRecoveryTrigger.BLE_DROPPED)
@@ -2327,7 +2354,9 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             }
         }
         val prev = _status.value
-        val json = SwiftCore.applyStatus(frame.cmdSet, frame.cmdId, frame.payload, prev.toJson())
+        val prevJson = statusJson?.takeIf { it.first === prev }?.second
+            ?: prev.toJson().also { statusJson = prev to it }
+        val json = SwiftCore.applyStatus(frame.cmdSet, frame.cmdId, frame.payload, prevJson)
         var next = if (json != null) CameraStatus.fromJson(json) else prev
         if (json == null || !next.hasHudFields) next = next.preservingExtras(prev)
         next = next.carryingAperture(prev)
@@ -2372,6 +2401,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 _gimbalMode.value = held ?: resolved
             }
             gimbalStickMapping = gimbalStickMapping.applyAttitude(frame.payload)
+            levelReading.ingest(frame.payload, SystemClock.elapsedRealtimeNanos() / 1e9)
+            judgeWorldLevelSnap()
             if (frame.payload.size >= 22) {
                 val now = SystemClock.elapsedRealtime()
                 val previousAt = lastValidGimbalAttitudeAt
@@ -2455,6 +2486,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             if (next.inPlayback != prev.inPlayback) {
                 Log.i(TAG, "live: inPlayback=${if (next.inPlayback) 1 else 0}")
             }
+            telemetryStatus = next
             _status.value = next
             publishFaceDetectWanted()
         }
@@ -2755,7 +2787,83 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         refreshZoomHud()
     }
 
+    /** On-screen stick double-tap and gamepad Circle/B, per the Double-tap setting. */
+    fun performGimbalDoubleTap() {
+        when (gimbalDoubleTap) {
+            GimbalDoubleTap.RECENTER -> recenterGimbal()
+            GimbalDoubleTap.LEVEL -> levelGimbalToWorld()
+        }
+    }
+
+    /**
+     * Double-tap Level: one `0x04/0x14` move to the nearest world target (horizon
+     * or plumb), judged on the attitude quaternion. Roll is not commanded.
+     */
+    fun levelGimbalToWorld() {
+        val now = SystemClock.elapsedRealtimeNanos() / 1e9
+        val tilt = levelReading.pitchDeg(now)
+        if (tilt == null) {
+            _controlNote.value = WorldLevelSnap.NO_LEVEL_DATA
+            return
+        }
+        val link = datalink ?: return
+        val pose = lastNativeGimbalPose
+        val plan = pose?.let { WorldLevelSnap.plan(tilt, it, now) }
+        if (plan == null) {
+            _controlNote.value = WorldLevelSnap.UNREACHABLE_NOTE
+            return
+        }
+        cancelProgrammedMove()
+        captureStableSince = 0L
+        captureStablePose = null
+        gimbalRestedAt = SystemClock.elapsedRealtime()
+        endGimbalStick()
+        worldLevelSnap = plan.first
+        link.sendDuml(
+            cmdSet = 0x04,
+            cmdId = CameraCommands.CMD_GIMBAL_ANGLE,
+            payload = plan.second,
+            flags = 0,
+            receiver = CameraCommands.RX_GIMBAL,
+        )
+    }
+
+    private fun judgeWorldLevelSnap() {
+        val snap = worldLevelSnap ?: return
+        // The operator or a programmed move took the gimbal: drop it silently.
+        // A stick takeover also ends the camera's timed move so it cannot fight the stick.
+        if (gimbalStickHeld || moveDriving) {
+            worldLevelSnap = null
+            if (gimbalStickHeld) sendTimedStop()
+            return
+        }
+        val now = SystemClock.elapsedRealtimeNanos() / 1e9
+        val fpv = if (_gimbalMode.value == GimbalMode.FPV) WorldLevelSnap.FPV_ROLL_NOTE else ""
+        val note = when (val outcome = snap.evaluate(levelReading.pitchDeg(now), now)) {
+            SnapOutcome.Pending -> return
+            SnapOutcome.Expired -> null
+            SnapOutcome.Arrived -> snap.target.successNote + fpv
+            is SnapOutcome.Failed -> {
+                sendTimedStop()
+                WorldLevelSnap.failureNote(outcome.errorDeg) + fpv
+            }
+        }
+        worldLevelSnap = null
+        if (note != null) _controlNote.value = note
+    }
+
+    private fun sendTimedStop() {
+        datalink?.sendDuml(
+            cmdSet = 0x04,
+            cmdId = CameraCommands.CMD_GIMBAL_ANGLE,
+            payload = CameraCommands.gimbalTimedStop(),
+            flags = 0,
+            receiver = CameraCommands.RX_GIMBAL,
+        )
+    }
+
     fun recenterGimbal() {
+        worldLevelSnap = null
         cancelProgrammedMove()
         captureStableSince = 0L
         captureStablePose = null
@@ -2866,7 +2974,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 if (_controlBusy.value) return
                 pressShutter()
             }
-            GamepadOperatorAction.RECENTER -> recenterGimbal()
+            GamepadOperatorAction.RECENTER -> performGimbalDoubleTap()
             GamepadOperatorAction.FLIP -> flipGimbal()
             GamepadOperatorAction.TRACK -> handleGamepadTrackToggle()
             GamepadOperatorAction.ZOOM_CHIP_IN ->
@@ -2995,13 +3103,16 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     /** iOS `decoder.onSourceFrame` → `considerFaceAF`. */
-    fun considerFaceFrame(bitmap: android.graphics.Bitmap) {
+    /** False when the detector would drop a frame offered now; skip its readback. */
+    fun wantsFaceFrame(): Boolean = faceDetector.wantsFrame()
+
+    fun considerFaceFrame(frame: LiveFaceDetector.Frame) {
         if (!_wantsFaceDetect.value) {
-            bitmap.recycle()
+            frame.release()
             clearFaceAF()
             return
         }
-        faceDetector.consider(bitmap) { hits -> applyDetectedFaces(hits) }
+        faceDetector.consider(frame) { hits -> applyDetectedFaces(hits) }
     }
 
     fun noteLiveFrame() {

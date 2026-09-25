@@ -6,8 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-Cumulative operator-facing notes for the build 63 → 102 open-beta update are in
-the [beta 102 release notes](handbook/src/content/docs/releases/beta-102.md), with
+### Changed
+
+- Android Live View uses about half the app CPU on a Galaxy S25 with a live
+  Pocket 4 Pro (1.83 to 0.88 G cycles/s with a LUT; 2.07 to 1.12 with LUT,
+  PEAK and WAVE), at an unchanged 25 fps. Face AF looks for faces at 10 Hz
+  until one appears and hands ML Kit NV21 converted natively, the always-mounted
+  assist palette no longer wakes Main on every 120 Hz vsync, and status frames
+  stop re-serializing an unchanged status. Face AF then runs ML Kit on 320×180
+  (it found the same faces as 640×360 in 30 to 54% less time) and WAVE / PARADE
+  reuse the previous build as their trail, bringing LUT to 0.62 and LUT, PEAK
+  and WAVE to 0.81 G cycles/s: 66% and 61% less app CPU than 0.1.5 (1), about
+  55% less for the whole phone. Sideload build 0.1.5 (2) carries it. A `perf` build type and
+  `just android-perf-soak` make the measurement repeatable
+  ([Android pass](docs/audits/2026-09-24-android-perf-pass.md)).
+
+### Fixed
+
+- Android Live View no longer crashes on some screen sizes while gimbal controls
+  are shown. Float rounding could make the Motion editor's default placement
+  range empty, and `coerceIn` threw (Sentry OPENPOCKETCINE-ANDROID-6/7/8). The
+  exposure meter placement had the same pattern.
+
+- Android: the portrait gimbal panel is only as tall as its content instead of
+  a fixed, mostly empty half of the screen.
+
+## [0.1.5] - 2026-09-24
+
+Cumulative operator-facing notes for the open beta build 138 (0.1.0) → 0.1.5
+update are in the [0.1.5 release notes](handbook/src/content/docs/releases/0-1-5.md),
+and for the build 63 → 102 update in the
+[beta 102 release notes](handbook/src/content/docs/releases/beta-102.md), each with
 separate iOS and Android lists.
 
 - Experimental AirPods head tracking now maps shared-forward head direction to
@@ -17,6 +46,19 @@ separate iOS and Android lists.
 
 ### Added
 
+- Android **sideload APK** for devices without Google Play, such as field
+  monitors: one arm64 package for Android 10 or newer on GitHub Releases
+  (`sideload-v0.1.5-1`). It is signed with its own key, so remove a Play copy
+  before installing it. Process: `docs/android-play-ci.md`.
+- **LEVEL** View Assist on iOS and Android: roll and tilt gauges against
+  gravity from the camera's own attitude sensor, laid out like a Nikon Z virtual
+  horizon (roll along the bottom, tilt right of centre), with a round bubble for
+  top-down and straight-up shots. Shows **No level data** instead of
+  a false level when attitude stops.
+- Gimbal drawer **Double-tap**: keep **Recenter**, or choose **Level** so a
+  joystick double-tap (and gamepad Circle/B) moves the lens to world level or
+  straight down / up, with a toast that confirms the result. Experimental until
+  checked on more cameras.
 - **Osmo Action 6** support on iOS and Android, implemented from the
   2026-09-21 Mimo survey: live view (one `0x09/0xa8` enable to receiver `0x41`,
   AVC, no Nano gate or Pocket prepare), Normal 10-bit / D-Log M color with the
@@ -25,6 +67,19 @@ separate iOS and Android lists.
   slot: live iris readout and the aperture strategies the camera offers.
   Gimbal, tap focus and focus modes are hidden. Not yet checked on a physical
   Action 6; see the Action 6 handbook page for what is and is not wired.
+- Per-camera **setups** on iOS **Your cameras** (discussion #406): each saved
+  camera shows **Camera Wi-Fi** plus, after **Add setup** (a native sheet),
+  **Wi-Fi** (a router; the camera scans as the page opens and lists networks as
+  it finds them) and **Hotspot** (name filled from that scan) chips, on every
+  Osmo camera including Action 6. The camera moves onto that network with the
+  Multiview commands and goes live only on the address that proves its
+  identity. A Hotspot connect first asks you to turn on Personal Hotspot unless
+  the phone already shows it in use. Connecting shows a progress bar with one
+  line of status; a failure offers Edit setup, Try again or Camera Wi-Fi and
+  names router causes (WPA3-only, MLO, client isolation). The next Camera Wi-Fi
+  connect restores the camera's own access point. Wi-Fi and Camera Wi-Fi are
+  checked on an iPhone 16 Pro Max with a Pocket 4 Pro; Hotspot and Action 6
+  are pending, and Android is not yet ported.
 - Experimental **Multiview on Android**, matching iOS: the grid button on
   **Your cameras**, the two-step Local Wi-Fi / phone hotspot setup, up to four
   identity-verified camera tiles with Auto LUT, per-tile and group recording,
@@ -340,9 +395,6 @@ separate iOS and Android lists.
 
 ### Fixed
 
-- Android: the portrait gimbal panel is only as tall as its content instead of
-  a fixed, mostly empty half of the screen.
-
 - Android clip playback: Delete and Cancel in the "Delete this clip from the
   camera?" dialog now respond instead of playing or pausing the clip behind it.
 
@@ -385,6 +437,7 @@ separate iOS and Android lists.
 - Motion Control waypoint letters and the dashed path compensate for settled
   selfie orientation and MIRROR on both shells. Saved positions and motion
   commands are unchanged. Physical camera verification remains pending.
+
 - Both shells can recover an established live feed after the decoder loses its
   video format while compressed frames keep arriving. The existing watchdog
   still owns the single repair and bounded escalation; startup and grace gates
@@ -1001,6 +1054,16 @@ separate iOS and Android lists.
 
 ### Changed
 
+- **Power and heat pass** (iOS measured on device, Android build-verified):
+  the floating-chrome glass backdrop blurs with Metal Performance Shaders and
+  draws as layers instead of per-panel CPU canvases; REC and scan pulses no longer
+  hold ProMotion at 120 Hz (the REC tally pulses in Core Animation); observed
+  state no longer re-renders SwiftUI on every frame or status packet; Face AF idles at
+  10 Hz without a face; journal redaction, DUML scanning and NAL classification
+  copy and scan less; paused playback stops redrawing on both platforms;
+  Android scopes, GLES programs, status publication and 4K playback grading
+  follow their budgets. Picture cadence and quality are unchanged. Method and
+  device A/B results: `docs/audits/2026-09-23-automated-perf-pass.md`.
 - FORMAT lists every `camcap_video_format` pair the body advertises, not only
   1080p / 4K 16:9. Catalog labels cover Nano 2.7K/4:3, Pocket 3 1:1/9:16/2.7K,
   Pocket 4 / 4 Pro 9:16 3K, Action 6 4K 1:1, and SlowMo 100/120/240. Unknown

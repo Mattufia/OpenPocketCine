@@ -40,6 +40,8 @@ struct FoundCamera: Identifiable, Sendable {
 final class BleLink: NSObject {
     private var central: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
+    /// Last classification yielded per peripheral in this scan.
+    private var yielded: [UUID: FoundCamera] = [:]
     private var connected: CBPeripheral?
     /// The only peripheral whose GATT events may drive pairing / GetSSID / notify.
     private var selectedId: UUID?
@@ -119,6 +121,7 @@ final class BleLink: NSObject {
         selectedId = nil
         disconnectForeignDJI(keeping: nil)
         peripherals.removeAll()
+        yielded.removeAll()
         return AsyncStream { cont in
             self.foundStream?.finish()
             self.foundStream = cont
@@ -186,6 +189,36 @@ final class BleLink: NSObject {
             self?.writing = false
             self?.pumpWrites()
         }
+    }
+
+    private var disconnectWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+
+    /// `disconnect()` only asks iOS to drop the link. Every central in this app shares one
+    /// link per camera, so a connect from another `BleLink` before iOS reports it down is
+    /// dropped with it (CBError 7). Callers that hand the camera over wait here.
+    func disconnectAndWait(timeout: TimeInterval = 3) async {
+        guard let peripheral = connected, peripheral.state != .disconnected else {
+            disconnect()
+            return
+        }
+        let id = peripheral.identifier
+        scheduleDisconnectDeadline(id, after: timeout)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            disconnectWaiters[id, default: []].append(continuation)
+            disconnect()
+        }
+    }
+
+    /// A camera that never reports the drop must not hold the hand-over forever.
+    private func scheduleDisconnectDeadline(_ id: UUID, after timeout: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            self?.resumeDisconnectWaiters(id)
+        }
+    }
+
+    private func resumeDisconnectWaiters(_ id: UUID) {
+        let waiting = disconnectWaiters.removeValue(forKey: id) ?? []
+        for waiter in waiting { waiter.resume() }
     }
 
     func disconnect() {
@@ -331,7 +364,7 @@ final class BleLink: NSObject {
             guard let camera = classify(p, adv) else { continue }
             if peripherals[p.identifier] == nil {
                 peripherals[p.identifier] = p
-                foundStream?.yield(camera)
+                yieldIfChanged(camera)
             }
         }
     }
@@ -347,13 +380,21 @@ extension BleLink: CBCentralManagerDelegate {
         advertisementData: [String: Any], rssi RSSI: NSNumber
     ) {
         guard let camera = classify(peripheral, advertisementData) else { return }
-        let first = peripherals[peripheral.identifier] == nil
         peripherals[peripheral.identifier] = peripheral
-        if first {
-            foundStream?.yield(camera)
+        // Later advert often adds the BLE name / model the first packet lacked.
+        yieldIfChanged(camera)
+    }
+
+    /// Duplicate adverts arrive many times a second per camera. Consumers only
+    /// need the first sighting and later name/model changes, not a MainActor
+    /// wake (and saved-camera load) per packet.
+    private func yieldIfChanged(_ camera: FoundCamera) {
+        if let last = yielded[camera.id], last.name == camera.name,
+            last.modelId == camera.modelId
+        {
             return
         }
-        // Later advert often adds the BLE name / model the first packet lacked.
+        yielded[camera.id] = camera
         foundStream?.yield(camera)
     }
 
@@ -378,6 +419,8 @@ extension BleLink: CBCentralManagerDelegate {
     func centralManager(
         _ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?
     ) {
+        // Before the selection guard: `disconnect()` has already cleared the selection.
+        resumeDisconnectWaiters(peripheral.identifier)
         // Cancelling a leftover Pocket must not abort the Nano scan / handshake.
         guard isSelected(peripheral) else {
             log.info(

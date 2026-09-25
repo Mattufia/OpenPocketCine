@@ -826,6 +826,88 @@ final class MonitorUIFlowTests: XCTestCase {
         capture("share-upcoming-destinations")
     }
 
+    /// #406: saved cameras show their setups; Add setup offers Wi-Fi or Hotspot. Chips and
+    /// Connect are not tapped here because they start a real connection.
+    func testSavedCameraSetupChipsAndAddSetupFlow() {
+        app.launchEnvironment["OPV_UI_REVIEW_SCREEN"] = "cameras"
+        app.launch()
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            rotate(orientation)
+            let wifi = app.buttons["cameras.setup.wifi"]
+            XCTAssertTrue(wifi.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.buttons["cameras.setup.phoneHotspot"].exists)
+            XCTAssertEqual(app.buttons.matching(identifier: "cameras.setup.cameraWiFi").count, 2)
+            XCTAssertGreaterThanOrEqual(wifi.frame.height, 43.5)
+            // Only the Nano fixture has a setup left to add.
+            let add = app.buttons["cameras.addSetup"]
+            XCTAssertEqual(app.buttons.matching(identifier: "cameras.addSetup").count, 1)
+            capture("camera-setup-chips-\(orientation.rawValue)")
+            // Landscape shows one and a half cards; the Nano's chip is below the fold.
+            for _ in 0..<3 where !add.isHittable { app.scrollViews.firstMatch.swipeUp() }
+            add.tap()
+            let chooseWiFi = app.buttons["addSetup.wifi"]
+            XCTAssertTrue(chooseWiFi.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["addSetup.phoneHotspot"].isHittable)
+            capture("add-setup-choose-\(orientation.rawValue)")
+            chooseWiFi.tap()
+            // Wi-Fi asks for location (iOS names the current network only with it).
+            let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                .buttons["Allow While Using App"]
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+            // Wi-Fi scans on open; the simulator has no camera, so it says so.
+            XCTAssertTrue(
+                app.descendants(matching: .any)["addSetup.scanStatus"].waitForExistence(timeout: 5))
+            capture("add-setup-wifi-\(orientation.rawValue)")
+            app.navigationBars.buttons["Add setup"].tap()
+            app.buttons["addSetup.phoneHotspot"].tap()
+            let name = app.textFields["addSetup.hotspotName"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            XCTAssertTrue(
+                app.otherElements["addSetup.hotspotStatus"].exists
+                    || app.staticTexts.containing(
+                        NSPredicate(format: "label CONTAINS 'Personal Hotspot'")
+                    ).count > 0)
+            capture("add-setup-hotspot-\(orientation.rawValue)")
+            app.navigationBars.buttons["Add setup"].tap()
+            app.navigationBars.buttons["Cancel"].tap()
+            XCTAssertTrue(add.waitForExistence(timeout: 5))
+            app.scrollViews.firstMatch.swipeDown()
+        }
+    }
+
+    /// The simulator never has a hotspot, so a hotspot connect must ask first. Cancel
+    /// leaves the camera untouched.
+    func testHotspotConnectAsksToTurnOnPersonalHotspot() {
+        app.launchEnvironment["OPV_UI_REVIEW_SCREEN"] = "cameras"
+        app.launch()
+        rotate(.portrait)
+        let hotspot = app.buttons["cameras.setup.phoneHotspot"]
+        XCTAssertTrue(hotspot.waitForExistence(timeout: 10))
+        hotspot.tap()
+        let alert = app.alerts["Turn on Personal Hotspot"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.buttons["Open Settings"].exists)
+        XCTAssertTrue(alert.buttons["Connect"].exists)
+        capture("hotspot-connect-prompt")
+        alert.buttons["Cancel"].tap()
+        XCTAssertFalse(app.staticTexts["CONNECTING"].exists)
+    }
+
+    func testConnectingCardShowsOneProgressLine() {
+        app.launchEnvironment["OPV_UI_REVIEW_SCREEN"] = "cameras"
+        app.launchEnvironment["OPV_UI_REVIEW_CONNECTING"] = "1"
+        app.launch()
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            rotate(orientation)
+            let progress = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH 'Moving the camera to Studio-5G'"))
+                .firstMatch
+            XCTAssertTrue(progress.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.buttons["Cancel connecting to Studio camera"].exists)
+            capture("connecting-progress-\(orientation.rawValue)")
+        }
+    }
+
     private func reveal(_ tab: XCUIElement, in rail: XCUIElement, portrait: Bool) {
         for _ in 0..<6 where !tab.isHittable {
             if portrait {

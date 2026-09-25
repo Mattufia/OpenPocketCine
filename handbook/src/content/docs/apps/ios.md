@@ -165,6 +165,45 @@ LUTs and picture warnings follow the correction, and framing guides align with
 the corrected picture. Desqueeze changes only the display: recordings, shared
 files and scope measurements keep the original image.
 
+## Level
+
+Enable **LEVEL** in View Assist to see how level the picture is against
+gravity. The reading comes from the camera's own attitude sensor, not the
+phone.
+
+- Two slim meters, laid out like a Nikon Z virtual horizon, show roll along
+  the bottom of the picture and tilt right of centre, the same distance from
+  the middle of the picture as the roll meter. A
+  short bar crosses a slim dark band to show the angle (full scale ±8°), with
+  small notches marking level. The line, bar and number turn green within 0.6° of
+  level.
+- Within about 25° of pointing straight down or up, the meters give way to a
+  round bubble level: a bead that is amber off level and green within 0.6° of
+  plumb. Use it for top-down
+  shots.
+- If the camera stops reporting attitude, the meters show a dash and
+  **No level data**. They never turn green without data.
+
+Tap LEVEL again to hide it; the on/off choice is saved. LEVEL is not shown in
+playback.
+
+### Double-tap Level
+
+In the gimbal drawer, **Double-tap** chooses what a double-tap on the joystick
+and Circle/B on a game controller do:
+
+- **Recenter** (default): the camera's own recenter, relative to the handle.
+- **Level**: one move to the nearest world target, which is the horizon, or
+  straight down or up once the lens is past 45°. A toast says
+  **Leveled to world**, **Leveled top-down** or **Leveled straight up** when the
+  tilt is within 0.5°, or reports how far off it stopped.
+
+Level corrects tilt only. In Follow and Tilt locked the gimbal already holds the
+horizon; in FPV roll follows the handle and the toast says so. With the handle
+upright the lens reaches about 44° down, so angle the handle forward for a
+top-down shot, then double-tap. Stick input cancels the move. Level and the
+roll direction are experimental until checked on more cameras.
+
 ## EV meter
 
 Enable **EV** in View Assist to show a slim white exposure line with a sun
@@ -282,7 +321,7 @@ space after rotation or resizing, including saved positions. Long-press a View A
   Scopes can be moved beneath the
   compass Head Lock control in either orientation. Responsiveness remains
   experimental. A connected game controller's selected stick drives the same path (Left by default).
-  Cross/A records. Circle/B recenters. Square/X is rotate-180. Triangle/Y
+  Cross/A records. Circle/B recenters, or levels with **Double-tap → Level**. Square/X is rotate-180. Triangle/Y
   tracks a face in frame or cancels. L1/R1 jump zoom out/in. L2/R2
   hold-to-zoom (deeper is faster). D-pad up/down ISO, left/right shutter.
   A toast says Gamepad connected or disconnected; unplug rests the
@@ -342,6 +381,39 @@ On **Your cameras**, PAIRED and NEARBY groups separate remembered cameras from
 new discoveries. Select a camera to see its connection progress and **Cancel**.
 **Pair new camera** opens the guided flow; select a discovered camera, then
 **Continue**. Media and Settings remain available without connecting.
+
+Each saved camera shows its **setups** as chips: **Camera Wi-Fi** (the camera's
+own access point) and, once added, **Wi-Fi** and **Hotspot**. Tap a chip to
+connect that way; the row's **Connect** uses the setup you used last.
+
+**Add setup** asks how the camera should connect:
+
+- **Wi-Fi**: a router or venue network. The camera starts scanning as soon as
+  this page opens, and nearby networks appear as it finds them (the camera
+  returns to its own Wi-Fi afterwards). The network this iPhone is on and
+  networks saved in this app are listed too, with their passwords remembered.
+  iOS names the current network only for apps with precise location permission,
+  so Wi-Fi asks for it the first time; only the network name is used.
+  **Other network…** takes a hidden name. The iPhone joins the network too. Use
+  WPA2 or a WPA2/WPA3 mix; guest networks that isolate devices block the picture.
+- **Hotspot**: this iPhone's Personal Hotspot. Turn on **Allow Others to Join**
+  and **Maximize Compatibility** in Settings → Personal Hotspot. iOS does not
+  share the phone's hotspot name or password with apps, so the camera scan fills
+  in the name when it sees the hotspot; paste the password once from Settings and
+  it is remembered. iOS only reveals that the hotspot is on once a device has
+  joined it, so connecting over Hotspot first asks you to turn it on (Settings or
+  Control Center), then connects when you tap **Connect**.
+
+Connecting moves the camera off its own Wi-Fi with the same captured commands as
+Multiview, and the app only goes live on the address that returns that camera's
+identity. A progress bar on the card shows each step. Over Wi-Fi this can take
+up to a minute: the router first gives the camera an address, then its video
+service starts (about 25 to 40 s for a Pocket 4 Pro on a home network). If a connect fails, the card offers **Edit
+setup**, **Try again** or **Connect over Camera Wi-Fi instead**. The next Camera
+Wi-Fi connect switches the camera back to its own access point. Touch and hold a
+Wi-Fi or Hotspot chip to forget it. Add setup is offered on every Osmo camera,
+including Action 6; the Wi-Fi and Hotspot setups are experimental until
+physically checked on each model.
 
 **Multiview** is an experimental iPhone/iPad stage for several cameras on shared
 Wi-Fi. From **Your cameras**, tap the grid icon to set up the network and add

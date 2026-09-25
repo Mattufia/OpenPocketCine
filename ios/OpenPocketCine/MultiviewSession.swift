@@ -19,7 +19,8 @@ final class MultiviewSession {
         var networkVerified = false
         var cameraAddress = ""
         var identity: [UInt8]?
-        var responses: [UInt16: Duml.Frame] = [:]
+        // Per ACK frame bookkeeping; no view reads it.
+        @ObservationIgnored var responses: [UInt16: Duml.Frame] = [:]
         var camera: FoundCamera?
         var status = "Add camera"
         var failureMessage: String?
@@ -107,7 +108,15 @@ final class MultiviewSession {
         var recordingAvailable = false
         var recordingNote: String?
         var controlHost: String?
-        var recordingObservation: (active: Bool, received: Date)?
+        /// Stamped per 0x02/0x80 frame. Views read `recordingActive`, which
+        /// only changes on a REC flip, instead of re-rendering per timestamp.
+        @ObservationIgnored var recordingObservation: (active: Bool, received: Date)? {
+            didSet {
+                let active = recordingObservation?.active
+                if active != recordingActive { recordingActive = active }
+            }
+        }
+        private(set) var recordingActive: Bool?
         init() {
             decoder.feedUpscaler = .off
             decoder.onPresentedFrame = { [weak self] in
@@ -134,7 +143,6 @@ final class MultiviewSession {
             ControlLiveLog.line("multiview: assist VT handoff enable")
         }
         var previewStarted: Date?
-        var lastFrame = Date.distantPast
     }
     let tiles = (0..<4).map { _ in Tile() }
     var found: [FoundCamera] = []
@@ -150,7 +158,7 @@ final class MultiviewSession {
     var groupRecordingBusy = false
     var groupRecordingNote: String?
     var recordingTiles: [Tile] { tiles.filter { $0.camera != nil } }
-    var anyRecording: Bool { recordingTiles.contains { $0.recordingObservation?.active == true } }
+    var anyRecording: Bool { recordingTiles.contains { $0.recordingActive == true } }
     var canRecordTogether: Bool {
         !busy && !groupRecordingBusy && !recordingTiles.isEmpty
             && recordingTiles.allSatisfy { $0.recordingAvailable && !$0.recordingBusy }
@@ -182,6 +190,7 @@ final class MultiviewSession {
     private var cleanupJournalWritten = false
     private let ble = BleLink(allowsConcurrentCameras: true)
     private var scanTask: Task<Void, Never>?
+    private var discovering = false
     private var router: Task<Void, Never>?
     private var keepalive: Task<Void, Never>?
     private var monitor: Task<Void, Never>?
@@ -275,18 +284,39 @@ final class MultiviewSession {
                 for tile in self.tiles {
                     tile.driver?.keepalive()
                     tile.recoverAssistHandoff()
-                    tile.recordingAvailable =
+                    let available =
                         tile.controlHost != nil
                         && tile.recordingObservation.map {
                             Date().timeIntervalSince($0.received) < 3
                         } == true
+                    if tile.recordingAvailable != available { tile.recordingAvailable = available }
                     self.monitorPreview(tile)
                 }
             }
         }
     }
+    /// BLE discovery feeds the Add picker and network setup, and stays up while
+    /// a camera connects. A full stage, or an inactive app with nothing
+    /// connecting, has no consumer for an unfiltered duplicate scan.
+    static func needsDiscovery(
+        running: Bool, applicationActive: Bool, hasEmptySlot: Bool, connecting: Bool
+    ) -> Bool {
+        running && (hasEmptySlot || connecting) && (applicationActive || connecting)
+    }
+
+    private var discoveryNeeded: Bool {
+        Self.needsDiscovery(
+            running: running && !closing, applicationActive: applicationActive,
+            hasEmptySlot: tiles.contains { $0.camera == nil }, connecting: connectingCameras)
+    }
+
     func scan() {
         scanTask?.cancel()
+        guard discoveryNeeded else {
+            stopDiscovery()
+            return
+        }
+        discovering = true
         scanTask = Task { [weak self] in
             guard let self else { return }
             guard await ble.waitUntilPoweredOn(), !Task.isCancelled else { return }
@@ -297,6 +327,22 @@ final class MultiviewSession {
             }
         }
     }
+    private func stopDiscovery() {
+        scanTask?.cancel()
+        ble.stopScan()
+        discovering = false
+    }
+
+    /// Follow demand without restarting a running scan (that clears `found`) or
+    /// starting one while the network-setup camera owns this BLE link.
+    private func refreshDiscovery() {
+        if !discoveryNeeded {
+            if discovering { stopDiscovery() }
+        } else if !discovering, !busy, preparedCamera == nil {
+            scan()
+        }
+    }
+
     private func next() -> UInt16 {
         sequence &+= 1
         return sequence
@@ -332,8 +378,7 @@ final class MultiviewSession {
         try await ble.connect(camera)
         try Task.checkCancellation()
         guard running else { throw CancellationError() }
-        scanTask?.cancel()
-        ble.stopScan()
+        stopDiscovery()
         replies.removeAll()
         approved = false
         let frames = ble.frames
@@ -506,36 +551,8 @@ final class MultiviewSession {
         // The host phone must not try joining its own hotspot. Its local bridge
         // may appear only after the first camera associates.
         if usePhoneHotspot { return }
-        if await WiFiJoiner.currentSSID() != ssid {
-            let config =
-                password.isEmpty
-                ? NEHotspotConfiguration(ssid: ssid)
-                : NEHotspotConfiguration(ssid: ssid, passphrase: password, isWEP: false)
-            config.joinOnce = false
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, Error>) in
-                NEHotspotConfigurationManager.shared.apply(config) { error in
-                    if let error,
-                        (error as NSError).code
-                            != NEHotspotConfigurationError.alreadyAssociated.rawValue
-                    {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
-            }
-        }
-        let deadline = Date().addingTimeInterval(12)
-        while Date() < deadline {
-            if await WiFiJoiner.currentSSID() == ssid, SharedWiFiPath.address() != nil { break }
-            try await Task.sleep(for: .milliseconds(200))
-        }
-        guard await WiFiJoiner.currentSSID() == ssid,
-            let address = SharedWiFiPath.address(hotspot: usePhoneHotspot)
-        else {
-            throw Failure.network
-        }
+        guard let address = try await SharedWiFiPath.joinHost(ssid: ssid, password: password)
+        else { throw Failure.network }
         host = address
         ready = true
     }
@@ -579,6 +596,7 @@ final class MultiviewSession {
                 // Keep camera assignments and sockets. Foreground watchdog owns repair.
             }
         }
+        refreshDiscovery()
     }
 
     func reconnect(_ tile: Tile) async {
@@ -762,11 +780,13 @@ final class MultiviewSession {
         tile.experimentalNetwork = experimental
         tile.networkVerified = false
         tile.status = "Connecting · approve on camera"
+        refreshDiscovery()
         defer {
             tile.connecting = false
             client.close()
             provisioners.removeValue(forKey: tile.id)
             if running { persistStage() }
+            refreshDiscovery()
         }
         persistStage()
         var stage = "host Wi-Fi"
@@ -790,125 +810,21 @@ final class MultiviewSession {
             stage = "camera Wi-Fi identity"
             let identity = try await client.exchange(Commands.getWifiSsid(id: client.next()))
                 .payload
-            guard identity.count > 2, identity[0] == 0 else { throw Failure.rejected }
-            if camera.hasMultiviewPreview && !experimental {
-                tile.status = "Selecting Video mode"
-                client.send(MulticamCommands.videoMode(seq: client.next()))
-                try await Task.sleep(for: .seconds(2))
-            }
-            stage = "station role"
-
-            let role = try await client.exchange(MulticamCommands.wifiWorkMode(seq: client.next()))
-                .payload
-            let decision = MulticamStationPolicy.decision(
-                reply: role,
-                allowMissingQuery: experimental || camera.acceptsMissingMultiviewRoleQuery(role))
-            let missingRoleQuery = decision == .setWithoutReadback
-            ControlLiveLog.line(
-                "multiview: station experimental=\(experimental) decision=\(decision)")
-            if decision != .alreadyStation {
-                guard decision != .reject else {
-                    throw ProvisioningFailure.message(
-                        "This camera did not report a supported Wi-Fi mode. Shared Wi-Fi setup is experimental for this model."
-                    )
-                }
-                let switched = try await client.exchange(
-                    MulticamCommands.stationMode(true, seq: client.next())
-                )
-                .payload
-                let accepted = MulticamStationPolicy.acceptsSetter(
-                    switched, missingQuery: missingRoleQuery)
-                guard accepted else {
-                    throw ProvisioningFailure.message(
-                        "The camera did not accept shared Wi-Fi mode.")
-                }
-                // The bounded experimental path also permits the captured missing-getter shape.
-                // Its join result and subsequent LAN identity check remain required.
-                if !missingRoleQuery {
-                    var stationReady = false
-                    for _ in 0..<6 {
-                        let reported = try await client.exchange(
-                            MulticamCommands.wifiWorkMode(seq: client.next())
-                        ).payload
-                        if reported == [0, 1] {
-                            stationReady = true
-                            break
-                        }
-                        guard reported == [0, 0] else { throw Failure.rejected }
-                        try await Task.sleep(for: .seconds(2))
-                    }
-                    guard stationReady else {
-                        throw ProvisioningFailure.message(
-                            "Camera Wi-Fi is still starting. Retry with the camera nearby.")
-                    }
-                }
-            }
+            stage = "station join"
+            var join = StationJoin(
+                model: camera.model, ssid: ssid, password: password, hotspot: usePhoneHotspot)
+            join.experimental = experimental
+            let outcome = try await join.run(
+                identity: identity, exchange: { try await client.exchange($0, timeout: $1) },
+                send: client.send, next: client.next, status: { tile.status = $0 },
+                hotspotReady: { SharedWiFiPath.address(hotspot: true) != nil },
+                verifyOnNetwork: {
+                    try await self.discoverPreview(tile, camera: camera, identity: identity)
+                    return true
+                }, log: { ControlLiveLog.line("multiview: \($0)") })
             tile.identity = identity
-            stage = "camera Wi-Fi join"
-            tile.status = "Waiting for camera Wi-Fi"
-            try await Task.sleep(for: .seconds(MulticamJoinPolicy.prepareSettleSeconds))
-            for attempt in 1...MulticamJoinPolicy.maximumAttempts {
-                tile.status =
-                    "Joining Wi-Fi · attempt \(attempt) of \(MulticamJoinPolicy.maximumAttempts)"
-                let joined: Duml.Frame
-                do {
-                    joined = try await client.exchange(
-                        MulticamCommands.join(ssid: ssid, password: password, seq: client.next()),
-                        timeout: MulticamJoinPolicy.replyTimeoutSeconds)
-                } catch {
-                    if error is CancellationError { throw error }
-                    ControlLiveLog.line(
-                        "multiview: join reply timeout; checking verified LAN identity")
-                    // A lost BLE reply is not proof that association failed.
-                    if !usePhoneHotspot || SharedWiFiPath.address(hotspot: true) != nil {
-                        do {
-                            try await discoverPreview(tile, camera: camera, identity: identity)
-                            MultiviewNetworkStore.save(
-                                ssid: ssid, password: password, hotspot: usePhoneHotspot)
-                            return
-                        } catch { if error is CancellationError { throw error } }
-                    }
-                    if attempt < MulticamJoinPolicy.maximumAttempts {
-                        try await Task.sleep(for: .seconds(MulticamJoinPolicy.retryDelaySeconds))
-                        continue
-                    }
-                    tile.identity = nil
-                    throw ProvisioningFailure.message(
-                        "Camera Wi-Fi did not respond. Retry setup with the camera nearby.")
-                }
-                // Only the fixed-size result is logged, never the credential request.
-                let result = joined.payload.prefix(4).map { String(format: "%02x", $0) }.joined(
-                    separator: " ")
-                ControlLiveLog.line("multiview: Wi-Fi join attempt=\(attempt) result=\(result)")
-                switch MulticamJoinPolicy.decision(reply: joined.payload, attempt: attempt) {
-                case .connected: break
-                case .retry:
-                    tile.status = "Retrying Wi-Fi connection"
-                    try await Task.sleep(for: .seconds(MulticamJoinPolicy.retryDelaySeconds))
-                    continue
-                case .rejected:
-                    tile.identity = nil
-                    throw ProvisioningFailure.message(
-                        "The camera could not join the shared Wi-Fi. Check its name and password, and make sure the network is in range."
-                    )
-                }
-                break
-            }
-            tile.identity = identity
-            if usePhoneHotspot {
-                tile.status = "Waiting for Personal Hotspot"
-                let deadline = Date().addingTimeInterval(15)
-                while SharedWiFiPath.address(hotspot: true) == nil && Date() < deadline {
-                    try await Task.sleep(for: .milliseconds(250))
-                }
-                guard SharedWiFiPath.address(hotspot: true) != nil else {
-                    throw ProvisioningFailure.message(
-                        "Enable Personal Hotspot and Allow Others to Join, then retry. The hotspot network is not available yet."
-                    )
-                }
-            }
             MultiviewNetworkStore.save(ssid: ssid, password: password, hotspot: usePhoneHotspot)
-            tile.identity = identity
+            if outcome == .verified { return }
             client.close()
             stage = "LAN discovery"
             try await discoverPreview(tile, camera: camera, identity: identity)
@@ -1081,10 +997,13 @@ final class MultiviewSession {
         driver.onAccessUnit = { [weak tile, weak driver] bytes in
             guard let tile, let driver, tile.driver === driver else { return }
             if tile.decoder.decode(accessUnit: bytes) {
-                if !tile.hasPicture { ControlLiveLog.line("multiview: station preview enqueued") }
-                tile.lastFrame = Date()
-                tile.hasPicture = true
-                tile.status = "Live · Video mode"
+                // Per access unit: re-writing these notified the whole tile view
+                // at the feed rate.
+                if !tile.hasPicture {
+                    ControlLiveLog.line("multiview: station preview enqueued")
+                    tile.hasPicture = true
+                }
+                if tile.status != "Live · Video mode" { tile.status = "Live · Video mode" }
             }
         }
         let nanoGate = camera.model.usesNanoLiveViewGate
@@ -1176,6 +1095,7 @@ final class MultiviewSession {
         tile.decoder.reset()
         tile.status = "Add camera"
         persistStage()
+        refreshDiscovery()
         return true
     }
     func stop() {
@@ -1192,8 +1112,7 @@ final class MultiviewSession {
         for search in searches.values { search.cancel() }
         searches.removeAll()
         monitor?.cancel()
-        scanTask?.cancel()
-        ble.stopScan()
+        stopDiscovery()
         disconnectBLE()
         ready = false
         password = ""

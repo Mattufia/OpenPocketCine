@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreBluetooth
 import CoreGraphics
 import Foundation
 import Observation
@@ -75,6 +76,15 @@ final class CameraSession {
     private(set) var connectedCamera: FoundCamera?
     /// Camera-AP SSID after a successful join. Re-read over BLE on the next connect.
     private(set) var joinedSSID: String?
+    /// Setup for the next connect (#406); session recovery reuses it. Disconnect resets it.
+    var connectionSetup: CameraConnectionSetup = .cameraWiFi
+    /// Wi-Fi or Hotspot address that answered with this body's BLE identity.
+    private(set) var stationHost: String?
+    /// Network a Wi-Fi or Hotspot setup moved the camera onto.
+    private(set) var stationSSID: String?
+    /// Hotspot provisioning step; the camera home shows it over the phase label.
+    private(set) var setupProgress: String?
+    @ObservationIgnored private var stationSeq: UInt16 = 1200
 
     /// Only used by the host's explicit Show Wi-Fi code sheet. Never advertised or logged.
     var watcherWiFiJoinCode: String? {
@@ -213,6 +223,9 @@ final class CameraSession {
     var gimbalMode: GimbalMode = .follow
     var gimbalSpeed: GimbalSpeed = .defaultSpeed
     var gimbalRamp: GimbalRamp = OperatorPrefs.gimbalRamp
+    var gimbalDoubleTap: GimbalDoubleTap = OperatorPrefs.gimbalDoubleTap
+    /// In-flight Double-tap Level move, judged on each attitude push.
+    @ObservationIgnored private var worldLevelSnap: WorldLevelSnap?
     var gimbalProgram = GimbalProgram()
     var gimbalMoveRunning = false
     var gimbalMovePaused = false
@@ -288,6 +301,9 @@ final class CameraSession {
     /// Last `0x04/0x05` hex + i16 dump (pitch-field hunt; payload is ~50 B).
     @ObservationIgnored var lastGimbalAttitudeHex = ""
     @ObservationIgnored var lastGimbalAttitudeDump = ""
+    /// World level from the attitude quaternion. LEVEL polls it at 10 Hz;
+    /// ingest at push rate must not invalidate observers.
+    @ObservationIgnored private(set) var levelReading = LevelReading()
     /// Pose-only stick invert (TT180). Shell XORs MIRROR assist.
     private(set) var gimbalPoseInvertPan = false
     /// Increments on a rising-edge gimbal-limit contact. Shell plays haptics.
@@ -590,7 +606,9 @@ final class CameraSession {
     func receiveMultiview(_ frame: Duml.Frame) {
         guard isMultiviewBorrowed else { return }
         applyIncomingStatus(frame)
-        isFeedWarming = decoder.lastPresentedAt == nil
+        // Per tile status frame: an unchanged write re-renders the tile chrome.
+        let warming = decoder.lastPresentedAt == nil
+        if warming != isFeedWarming { isFeedWarming = warming }
     }
     func releaseMultiview() {
         guard isMultiviewBorrowed else { return }
@@ -730,6 +748,9 @@ final class CameraSession {
         scanTask?.cancel()
         abortInFlightRun()
         connectedCamera = nil
+        connectionSetup = .cameraWiFi
+        stationHost = nil
+        stationSSID = nil
         phase = .idle
         statusFlushTask?.cancel()
         statusFlushTask = nil
@@ -848,6 +869,7 @@ final class CameraSession {
     /// resumes a pending `ble.connect` so the old Task cannot keep writing 0x07/45.
     private func abortInFlightRun(preserveDecoder: Bool = false, preserveSoftAP: Bool = false) {
         cameraPathRecovery.reset()
+        setupProgress = nil
         foregroundGeneration += 1
         foregroundCheckTask?.cancel()
         foregroundCheckTask = nil
@@ -930,7 +952,7 @@ final class CameraSession {
         // leftover P-frames cannot set lastPresentedAt and skip first-picture.
         decoder.beginIDRHold()
         phase = .connectingGatt
-        try await ble.connect(camera)
+        try await connectBleRetryingDrop(camera)
         timeline.mark("gatt", now: ProcessInfo.processInfo.systemUptime)
         try Task.checkCancellation()
         startFrameRouter()
@@ -959,9 +981,20 @@ final class CameraSession {
         // pairing used to. Warm path (SoftAP still up + cached creds) skips the
         // settle sleeps; 0x53/0x10 still goes out.
         startKeepalive(ssid: nil)
+        let saved = SavedCameraStore.load().first { $0.id == camera.id }
+        if connectionSetup.movesCamera {
+            let ssid = try await runStation(camera, saved: saved)
+            timeline.mark("hs", now: ProcessInfo.processInfo.systemUptime)
+            log.info("\(timeline.line(), privacy: .public)")
+            try Task.checkCancellation()
+            startKeepalive(ssid: ssid)
+            return
+        }
         phase = .readingWifiCreds
+        let restoreAP = saved?.lastSetup?.movesCamera == true
+        if restoreAP { await restoreCameraAccessPoint() }
         let credsFromCache = resolvedWifiCreds(for: camera).skipBle
-        let skipAPSettle = WiFiJoiner.isCameraPathReady() && credsFromCache
+        let skipAPSettle = !restoreAP && cameraPathReady() && credsFromCache
         if !skipAPSettle {
             try await Task.sleep(for: .milliseconds(200))
         }
@@ -1023,11 +1056,7 @@ final class CameraSession {
         if let existing, CameraSoftAP.shouldReuseDatalink(isClosed: existing.isClosed) {
             dl = existing
         } else {
-            dl = DatalinkDriver(
-                port: UInt16(camera.model.datalinkPort),
-                tcpPoke: camera.model.tcpPoke,
-                pairingToken: camera.model.pairingToken,
-                subscriptionKeys: Commands.subscriptionKeys(for: camera.model))
+            dl = makeDatalink(camera)
             wireDatalink(dl)
             datalink = dl
         }
@@ -1069,7 +1098,7 @@ final class CameraSession {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                let pathReady = WiFiJoiner.isCameraPathReady()
+                let pathReady = cameraPathReady()
                 if CameraSoftAP.shouldKickAfterHandshakeTimeout(pathReady: pathReady) {
                     throw error
                 }
@@ -1083,6 +1112,230 @@ final class CameraSession {
                     for: .milliseconds(CameraSoftAP.handshakeRetryPauseMilliseconds))
             }
         }
+    }
+
+    // ---- Wi-Fi and Hotspot setups (#406) ----------------------------------------------------------
+
+    private var usesHotspot: Bool { connectionSetup == .phoneHotspot }
+
+    /// Camera path for the active setup: the SoftAP subnet, the operator's Wi-Fi, or this
+    /// phone's hotspot bridge.
+    #if targetEnvironment(simulator)
+        /// UI review only: a connecting card without a camera.
+        func reviewConnecting(_ id: UUID, setup: CameraConnectionSetup, progress: String) {
+            connectionTargetID = id
+            connectionSetup = setup
+            setupProgress = progress
+            phase = .joiningWifi
+        }
+    #endif
+
+    private func cameraPathReady() -> Bool {
+        connectionSetup.movesCamera
+            ? SharedWiFiPath.address(hotspot: usesHotspot) != nil
+            : WiFiJoiner.isCameraPathReady()
+    }
+
+    private func makeDatalink(_ camera: FoundCamera, host: String? = nil) -> DatalinkDriver {
+        let host = host ?? (connectionSetup.movesCamera ? stationHost : nil)
+        return DatalinkDriver(
+            port: UInt16(camera.model.datalinkPort), tcpPoke: camera.model.tcpPoke,
+            pairingToken: camera.model.pairingToken, stationHost: host,
+            stationHotspot: host != nil && usesHotspot,
+            subscriptionKeys: Commands.subscriptionKeys(for: camera.model))
+    }
+
+    /// The camera drops a new link for a few seconds after a Wi-Fi role change: seen on a
+    /// Pocket 4 Pro right after Add setup's scan returned it to its access point
+    /// (CBError 7 twice, a manual retry 12 s later connected). Bounded retries.
+    private func connectBleRetryingDrop(_ camera: FoundCamera) async throws {
+        for attempt in 1...3 {
+            do {
+                try await ble.connect(camera)
+                return
+            } catch let error as CBError where error.code == .peripheralDisconnected && attempt < 3
+            {
+                ControlLiveLog.line("ble: camera dropped the new link; retry \(attempt) of 2")
+                try await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func nextStationSeq() -> UInt16 {
+        stationSeq &+= 1
+        return stationSeq
+    }
+
+    private func exchangeBle(_ frame: Duml.Frame, timeout: TimeInterval) async throws
+        -> Duml.Frame
+    {
+        try await waitFrame(
+            frame.cmdSet, frame.cmdId, timeout: .seconds(timeout), consumeHold: false
+        ) { [ble] in ble.send(frame) }
+    }
+
+    /// A camera last sent to the phone hotspot may still be in station role with its own
+    /// access point down. `07/48 00` is the reset Multiview sends on close. A missing or
+    /// refused reply is not fatal: an AP already up still serves the normal join.
+    private func restoreCameraAccessPoint() async {
+        let reply = try? await exchangeBle(
+            MulticamCommands.stationMode(false, seq: nextStationSeq()), timeout: 12)
+        let accepted = reply?.payload == [0] || reply?.payload == [0, 0]
+        ControlLiveLog.line("wifi: restore camera access point accepted=\(accepted)")
+        // Join only once `07/39` reports 00 00 (access point; 00 01 is station). A Pocket 4
+        // Pro confirmed within 0.2 to 2.4 s on hardware; the log keeps the timing.
+        let started = Date()
+        for _ in 0..<15 {
+            let role = try? await exchangeBle(
+                MulticamCommands.wifiWorkMode(seq: nextStationSeq()), timeout: 4)
+            let hex = role?.payload.map { String(format: "%02x", $0) }.joined(separator: " ")
+            ControlLiveLog.line(
+                "wifi: camera role after restore \(hex ?? "no reply") at \(String(format: "%.1f", Date().timeIntervalSince(started))) s"
+            )
+            if role?.payload == [0, 0] { break }
+            try? await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    /// Moves the camera onto the operator's Wi-Fi or this phone's Personal Hotspot with the
+    /// captured Multiview sequence, then goes live on the address that proves this body.
+    private func runStation(_ camera: FoundCamera, saved: SavedCamera?) async throws -> String {
+        guard let ssid = saved?.ssid(for: connectionSetup),
+            let network = MultiviewNetworkStore.load(ssid: ssid, hotspot: usesHotspot)
+        else { throw Fail.setupNotSaved }
+        phase = .joiningWifi
+        stationSSID = ssid
+        defer { setupProgress = nil }
+        // Neither setup keeps the phone on a camera access point.
+        if let joined = joinedSSID {
+            WiFiJoiner.leave(ssid: joined)
+            joinedSSID = nil
+        }
+        // Wi-Fi: this phone joins first. Hotspot: the phone hosts it and joins nothing.
+        if !usesHotspot {
+            setupProgress = "Joining \(ssid) on this iPhone"
+            guard try await SharedWiFiPath.joinHost(ssid: ssid, password: network.password) != nil
+            else { throw Fail.hostWiFi(ssid) }
+        }
+        if camera.model.family == .nano {
+            setupProgress = "Waking camera Wi-Fi"
+            let wake = try await exchangeBle(
+                Commands.session5310(id: nextStationSeq()), timeout: 12)
+            guard wake.payload == [1, 0, 0, 0] else { throw Fail.nanoWake }
+            try await Task.sleep(for: .seconds(1))
+        }
+        let identity = try await exchangeBle(
+            Commands.getWifiSsid(id: nextStationSeq()), timeout: 12
+        ).payload
+        var join = StationJoin(
+            model: camera.model, ssid: ssid, password: network.password, hotspot: usesHotspot)
+        join.probeExistingStation = true
+        // Bodies without a captured preview profile (Action, 360) take Multiview's bounded
+        // experimental path: no Pocket video-mode route, missing role getter allowed.
+        join.experimental = !MulticamSupport.hasPreview(camera.model)
+        let outcome = try await join.run(
+            identity: identity, exchange: { try await self.exchangeBle($0, timeout: $1) },
+            send: { self.ble.send($0) }, next: nextStationSeq,
+            status: { self.setupProgress = $0 },
+            hotspotReady: { SharedWiFiPath.address(hotspot: true) != nil },
+            verifyOnNetwork: {
+                try await self.openStationDatalink(camera, identity: identity, within: 0)
+            },
+            log: { ControlLiveLog.line("station: \($0)") })
+        if outcome == .joined {
+            setupProgress = "Finding the camera on \(ssid)"
+            // A router hands the camera an address, then its services start: about 40 s
+            // after the join on a Pocket 4 Pro on a home /24 (2026-09-24 device run).
+            guard try await openStationDatalink(camera, identity: identity, within: 60) else {
+                throw Fail.stationCameraMissing(ssid)
+            }
+        }
+        return ssid
+    }
+
+    /// An address counts only when its datalink answers `07/07` with the identity read over
+    /// BLE: other cameras can share the network. Then register and send the one enable.
+    /// `within` seconds: keep sweeping the subnet until the camera answers or time runs out.
+    private func openStationDatalink(
+        _ camera: FoundCamera, identity: [UInt8], within patience: TimeInterval
+    ) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(patience)
+        var sweep = 0
+        repeat {
+            sweep += 1
+            if try await openStationDatalinkOnce(camera, identity: identity, sweep: sweep) {
+                return true
+            }
+            guard Date() < deadline else { break }
+            try await Task.sleep(for: .seconds(2))
+        } while Date() < deadline
+        return false
+    }
+
+    private func openStationDatalinkOnce(_ camera: FoundCamera, identity: [UInt8], sweep: Int)
+        async throws -> Bool
+    {
+        guard cameraPathReady() else {
+            ControlLiveLog.line(
+                "station: sweep \(sweep) no \(usesHotspot ? "hotspot" : "Wi-Fi") address")
+            return false
+        }
+        let known = stationHost.map { [$0] } ?? []
+        // Whether the phone is on the setup's network, never the name: diagnostics are shared.
+        let current = await WiFiJoiner.currentSSID()
+        let phoneNetwork = current == nil ? "unnamed" : current == stationSSID ? "same" : "other"
+        let started = Date()
+        let found: [String]
+        do {
+            found = try await MultiviewDiscovery().candidates(excluding: [], hotspot: usesHotspot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            ControlLiveLog.line(
+                "station: sweep \(sweep) cannot scan this subnet (\(error.localizedDescription))")
+            found = []
+        }
+        let subnet =
+            SharedWiFiPath.address(hotspot: usesHotspot).flatMap { address in
+                SharedWiFiPath.netmask(hotspot: usesHotspot).flatMap {
+                    MulticamDiscovery.hosts(address: address, mask: $0)?.count
+                }
+            } ?? 0
+        ControlLiveLog.line(
+            "station: sweep \(sweep) phone=\(usesHotspot ? "hotspot" : phoneNetwork) hosts=\(subnet) answering=\(found.count) known=\(known.count) in \(String(format: "%.1f", Date().timeIntervalSince(started))) s"
+        )
+        for host in known + found.filter({ !known.contains($0) }) {
+            try Task.checkCancellation()
+            disposeDatalink()
+            let dl = makeDatalink(camera, host: host)
+            wireDatalink(dl)
+            datalink = dl
+            do {
+                try await dl.open(identityOnly: true)
+                let reply = try await waitFrame(
+                    0x07, 0x07, timeout: .seconds(8), consumeHold: false
+                ) { _ = dl.send(Commands.getWifiSsid(id: 0)) }
+                guard reply.payload == identity, shouldCommitLiveHandshake(dl) else {
+                    ControlLiveLog.line("station: an answering device is another camera")
+                    continue
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                ControlLiveLog.line("station: an answering device did not open the datalink")
+                continue
+            }
+            ControlLiveLog.line("station: camera identity verified on the network")
+            stationHost = host
+            dl.completeRegistration()
+            phase = .live
+            applyLinkPresentation()
+            beginIDRHoldIfNeeded()
+            sendInitialLiveViewEnable(displayAttached: decoder.isDisplayReady, pathProven: true)
+            return true
+        }
+        disposeDatalink()
+        return false
     }
 
     // ---- BLE frame routing -----------------------------------------------------------------------
@@ -1107,7 +1360,7 @@ final class CameraSession {
     }
 
     private func liveVideoIsFresh() -> Bool {
-        WiFiJoiner.isCameraPathReady()
+        cameraPathReady()
             && datalink?.lastVideoPacketAt.map {
                 Date().timeIntervalSince($0) < FeedWatchdog.stallThreshold
             } == true
@@ -1541,9 +1794,15 @@ final class CameraSession {
     /// the confirmation test because the live factor comes back off a lens
     /// position, a hair off what was asked.
     private func reconcileZoomPin(_ live: Double?) {
+        // Reconcile a copy: `zoomPin` is observed, and an inout access notifies
+        // every zoom reader (chip, caption, watcher relay) on each status frame
+        // even when nothing changes. Reconcile only ever releases the pin.
+        guard zoomPin != nil else { return }
+        var pin = zoomPin
         _ = CameraValuePin.reconcile(
-            &zoomPin, reported: live, now: Date.timeIntervalSinceReferenceDate,
+            &pin, reported: live, now: Date.timeIntervalSinceReferenceDate,
             confirms: CamFov.matches)
+        if pin == nil { zoomPin = nil }
     }
 
     private func noteZoomIfChanged(_ new: CameraStatus) {
@@ -1556,15 +1815,19 @@ final class CameraSession {
         guard new.zoomFactorRaw > 0 || new.zoomLens != nil else { return }
         if let factor = new.zoomFactor {
             if !zoomStopTouched {
+                // Raw zoom moves every status frame during a slew; the stop
+                // rarely does. Write only on change so zoom readers stay quiet.
+                var stop = zoomStop
                 if abs(factor - CamFov.maxFactor) < 0.15 {
-                    zoomStop = 12
+                    stop = 12
                 } else if abs(factor - 6) < 0.2 {
-                    zoomStop = 6
+                    stop = 6
                 } else if abs(factor - 3) < 0.2 {
-                    zoomStop = 3
+                    stop = 3
                 } else if factor < 2.5 {
-                    zoomStop = 1
+                    stop = 1
                 }
+                if stop != zoomStop { zoomStop = stop }
             }
         }
         let now = Date()
@@ -2632,11 +2895,75 @@ final class CameraSession {
         )
     }
 
+    /// On-screen stick double-tap and gamepad Circle/B, per the Double-tap setting.
+    func performGimbalDoubleTap() {
+        switch gimbalDoubleTap {
+        case .recenter: recenterGimbal()
+        case .level: levelGimbalToWorld()
+        }
+    }
+
+    /// Double-tap Level: one `0x04/0x14` move to the nearest world target
+    /// (horizon or plumb), judged on the attitude quaternion. Roll is not commanded.
+    func levelGimbalToWorld() {
+        guard !isLocked else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let tilt = levelReading.pitchDeg(now: now) else {
+            controlNote = WorldLevelSnap.noLevelData
+            return
+        }
+        guard let datalink else { return }
+        guard let pose = lastNativeGimbalWaypoint,
+            let plan = WorldLevelSnap.plan(tiltDeg: tilt, pose: pose, now: now)
+        else {
+            controlNote = WorldLevelSnap.unreachableNote
+            return
+        }
+        endGimbalStick(cancelMove: true)
+        movePoseStableSince = nil
+        lastMoveObservedPose = nil
+        gimbalOverlayMotion.reset()
+        lastGimbalStickAt = Date()
+        worldLevelSnap = plan.snap
+        let seq = datalink.send(plan.frame)
+        ControlLiveLog.line(
+            "control: send World level 0x04/0x14 seq=\(seq) tilt=\(String(format: "%.1f", tilt)) target=\(plan.snap.target) payload=\(Duml.hex(plan.frame.payload))"
+        )
+    }
+
+    private func judgeWorldLevelSnap() {
+        guard let snap = worldLevelSnap else { return }
+        // The operator or a programmed move took the gimbal: drop it silently.
+        // A stick takeover also ends the camera's timed move so it cannot fight the stick.
+        if gimbalStickHeld || gimbalMoveRunning {
+            worldLevelSnap = nil
+            if gimbalStickHeld { _ = datalink?.sendUntracked(Commands.gimbalTimedStop()) }
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let fpv = gimbalMode == .fpv ? WorldLevelSnap.fpvRollNote : ""
+        switch snap.evaluate(tiltDeg: levelReading.pitchDeg(now: now), now: now) {
+        case .pending:
+            return
+        case .expired:
+            worldLevelSnap = nil
+            return
+        case .arrived:
+            controlNote = snap.target.successNote + fpv
+        case .failed(let error):
+            _ = datalink?.sendUntracked(Commands.gimbalTimedStop())
+            controlNote = WorldLevelSnap.failureNote(errorDeg: error) + fpv
+        }
+        worldLevelSnap = nil
+        ControlLiveLog.line("control: world level \(controlNote ?? "-")")
+    }
+
     /// Stick double-tap (hardware joystick). Wire is Mimo's recenter button:
     /// `0x04/0x4C` `FE 08`. Mimo has no stick double-tap.
     func recenterGimbal() {
         guard !isLocked else { return }
         guard datalink != nil else { return }
+        worldLevelSnap = nil
         endGimbalStick(cancelMove: true)
         movePoseStableSince = nil
         lastMoveObservedPose = nil
@@ -3084,7 +3411,7 @@ final class CameraSession {
             guard !controlBusy else { return }
             pressShutter()
         case .recenter:
-            recenterGimbal()
+            performGimbalDoubleTap()
         case .flip:
             flipGimbal()
         case .track:
@@ -3251,10 +3578,13 @@ final class CameraSession {
         else { return }
         guard let box = TrackingBox.parseLivePush(payload) else { return }
         lastSubjectPushAt = Date()
-        subjectBox = smoothedSubject(toward: box)
-        isTracking = true
+        // Per ActiveTrack push: unchanged writes would still re-render the
+        // tracking layer, so publish only what moved.
+        let subject = smoothedSubject(toward: box)
+        if subjectBox != subject { subjectBox = subject }
+        if !isTracking { isTracking = true }
         trackingSawLock = true
-        searchBox = nil
+        if searchBox != nil { searchBox = nil }
         adoptCameraFocus(x: box.centerX, y: box.centerY, fromTrackingBox: true)
         if trackingPollTask == nil { beginTrackingPoll() }
     }
@@ -3311,21 +3641,32 @@ final class CameraSession {
                 from: faceTracks[i].box, toward: faceTracks[i].target, dt: dt,
                 sceneMoving: sceneMoving)
         }
-        sceneFaces = faceTracks.map(\.box)
+        setSceneFaces(faceTracks.map(\.box))
         if isTrackingActive {
-            faceBox = nil
+            setFaceBox(nil)
             return
         }
         let sinceHit = FaceTrackHold.secondsSinceHit(lastHit: lastFaceHitAt, now: now)
         if FaceTrackHold.shouldDrop(secondsSinceHit: sinceHit, sceneMoving: sceneMoving) {
-            faceBox = nil
+            setFaceBox(nil)
             faceTarget = nil
             lastFaceHitAt = nil
             return
         }
         guard let target = faceTarget else { return }
-        faceBox = FaceTrackHold.follow(
-            from: faceBox, toward: target, dt: dt, sceneMoving: sceneMoving)
+        setFaceBox(
+            FaceTrackHold.follow(
+                from: faceBox, toward: target, dt: dt, sceneMoving: sceneMoving))
+    }
+
+    // Face boxes are written per decoded frame. Unchanged writes still notify
+    // every focus overlay reader, so publish only real motion.
+    private func setFaceBox(_ box: TrackingBox?) {
+        if faceBox != box { faceBox = box }
+    }
+
+    private func setSceneFaces(_ boxes: [TrackingBox]) {
+        if sceneFaces != boxes { sceneFaces = boxes }
     }
 
     private func applyDetectedFaces(_ hits: [FaceHit]) {
@@ -3361,15 +3702,15 @@ final class CameraSession {
             next.append(FaceTrack(box: hit.box, target: hit.box, lastHit: now))
         }
         faceTracks = next
-        sceneFaces = next.map(\.box)
+        setSceneFaces(next.map(\.box))
         if isTrackingActive {
-            faceBox = nil
+            setFaceBox(nil)
             faceTarget = nil
             lastFaceHitAt = nil
             return
         }
         guard wantsFaceAF else {
-            faceBox = nil
+            setFaceBox(nil)
             faceTarget = nil
             lastFaceHitAt = nil
             return
@@ -3428,7 +3769,7 @@ final class CameraSession {
             secondsSinceHit: sinceHit, sceneMoving: sceneMoving)
         guard let chosen else {
             if FaceTrackHold.shouldDrop(secondsSinceHit: sinceHit, sceneMoving: sceneMoving) {
-                faceBox = nil
+                setFaceBox(nil)
                 faceTarget = nil
                 lastFaceHitAt = nil
             }
@@ -3442,12 +3783,12 @@ final class CameraSession {
     }
 
     private func clearFaceAF() {
-        faceBox = nil
+        setFaceBox(nil)
         faceTarget = nil
         lastFaceAt = nil
         lastFaceHitAt = nil
         faceTracks = []
-        sceneFaces = []
+        setSceneFaces([])
         facePriorityAcquireAt = nil
     }
 
@@ -3471,16 +3812,17 @@ final class CameraSession {
         else { return }
         switch TrackingPoll.parse(payload) {
         case .locked(let cameraBox):
-            isTracking = true
+            if !isTracking { isTracking = true }
             trackingSawLock = true
             if let cameraBox {
-                subjectBox = smoothedSubject(toward: cameraBox)
+                let subject = smoothedSubject(toward: cameraBox)
+                if subjectBox != subject { subjectBox = subject }
             } else if subjectBox == nil, let search = searchBox {
                 subjectBox = TrackingBox.subject(from: search)
             }
-            searchBox = nil
+            if searchBox != nil { searchBox = nil }
         case .idle:
-            isTracking = false
+            if isTracking { isTracking = false }
             if trackingSawLock {
                 clearLocalTracking()
             }
@@ -3959,7 +4301,7 @@ final class CameraSession {
             } == true
         let shouldRecover = cameraPathRecovery.tick(
             now: ProcessInfo.processInfo.systemUptime,
-            pathReady: WiFiJoiner.isCameraPathReady(), videoFresh: videoFresh,
+            pathReady: cameraPathReady(), videoFresh: videoFresh,
             sessionActive: phase == .live && gimbalControlSceneActive
                 && !holdsMonitor && !sessionRecovery.isRecovering && !isMultiviewBorrowed
                 && connectedCamera != nil,
@@ -4077,7 +4419,7 @@ final class CameraSession {
     /// unless handshake already proved the socket (`pathProven`).
     private func sendInitialLiveViewEnable(displayAttached: Bool, pathProven: Bool = false) {
         if isBrowsingMedia { return }
-        let pathReady = pathProven || WiFiJoiner.isCameraPathReady()
+        let pathReady = pathProven || cameraPathReady()
         if pathProven
             ? CameraSoftAP.shouldSendLiveViewEnableAfterHandshake(alreadySent: liveViewEnableSent)
             : CameraSoftAP.shouldSendLiveViewEnable(
@@ -4232,7 +4574,7 @@ final class CameraSession {
             sawPicture: hasStableLivePicture,
             statusFresh: statusFresh,
             secondsSinceLastEnable: now.timeIntervalSince(lastIdrRequest),
-            pathReady: WiFiJoiner.isCameraPathReady()
+            pathReady: cameraPathReady()
         )
     }
 
@@ -4265,7 +4607,7 @@ final class CameraSession {
         if cameraGalleryOpen { return }
         if needsForegroundRecover { return }
         if datalink?.isRebuilding == true || feedRecoveryTask != nil { return }
-        guard WiFiJoiner.isCameraPathReady() else { return }
+        guard cameraPathReady() else { return }
         if MediaLiveResume.strayPlaybackAction(
             browsing: isBrowsingMedia, inPlayback: status.inPlayback) != nil
         {
@@ -4502,7 +4844,7 @@ final class CameraSession {
             lastAccessUnitAge: datalink?.lastAccessUnitAt.map { now.timeIntervalSince($0) },
             lastStatusAge: datalink?.lastStatusAt.map { now.timeIntervalSince($0) },
             flowHealthy: datalink?.isFlowHealthy ?? false,
-            pathReady: WiFiJoiner.isCameraPathReady(),
+            pathReady: cameraPathReady(),
             hasFormat: decoder.hasFormat,
             decoderFailed: decoder.isDecoderWedged || decoder.displayLayer.status == .failed,
             live: live,
@@ -4529,7 +4871,8 @@ final class CameraSession {
         )
         let watchdogBeforeTick = feedWatchdog
         let action = feedWatchdog.tick(snap)
-        feedRecovering = feedWatchdog.isRecovering || feedRecoveryTask != nil
+        let recovering = feedWatchdog.isRecovering || feedRecoveryTask != nil
+        if recovering != feedRecovering { feedRecovering = recovering }
         switch action {
         case .none:
             if decoder.awaitingIDR, decoder.canReleaseIDRHold,
@@ -4644,7 +4987,7 @@ final class CameraSession {
                     self.isLivePictureRepairCurrent(pictureOwner),
                     Date().timeIntervalSince(started) < FeedWatchdog.decoderRepairDeadline
                 {
-                    if self.decoder.isPresentationReady, WiFiJoiner.isCameraPathReady(),
+                    if self.decoder.isPresentationReady, cameraPathReady(),
                         !self.isBrowsingMedia, !self.status.inPlayback,
                         !self.liveEnableGate.inFlight
                     {
@@ -4737,7 +5080,7 @@ final class CameraSession {
             recordFeedRepair("enable", phase: .blocked, reason: "playback")
             return false
         }
-        let pathReady = WiFiJoiner.isCameraPathReady()
+        let pathReady = cameraPathReady()
         let decoderReady = decoder.isPresentationReady
         guard FeedWatchdog.shouldSendRecoverEnable(pathReady: pathReady, decoderReady: decoderReady)
         else {
@@ -4983,8 +5326,11 @@ final class CameraSession {
     private func recoverAfterForeground(currentSSID: String?, pictureOwner: Int) async {
         guard isLivePictureRepairCurrent(pictureOwner) else { return }
         let now = Date()
-        let pathReady = WiFiJoiner.isCameraPathReady()
-        let wrongNetwork = currentSSID.map { !$0.isEmpty && $0 != joinedSSID } ?? false
+        let pathReady = cameraPathReady()
+        // The hotspot host is not associated to any Wi-Fi, so its SSID says nothing.
+        let expectedSSID = connectionSetup == .cameraWiFi ? joinedSSID : stationSSID
+        let wrongNetwork =
+            !usesHotspot && (currentSSID.map { !$0.isEmpty && $0 != expectedSSID } ?? false)
         let videoFresh =
             datalink?.lastVideoPacketAt.map {
                 now.timeIntervalSince($0) < FeedWatchdog.stallThreshold
@@ -5019,7 +5365,7 @@ final class CameraSession {
                 } == true
         }
         // The path may have dropped during the wait; its 8 s grace owns that.
-        guard WiFiJoiner.isCameraPathReady(), !sessionRecovery.isRecovering else { return }
+        guard cameraPathReady(), !sessionRecovery.isRecovering else { return }
         guard videoResumed else {
             // Suspension usually leaves only the UDP endpoint stale. Renegotiate
             // it with BLE and the picture kept; its failure escalates to the
@@ -5237,7 +5583,7 @@ final class CameraSession {
         }
         holdsMonitor = true
         abortInFlightRun(
-            preserveDecoder: true, preserveSoftAP: WiFiJoiner.isCameraPathReady())
+            preserveDecoder: true, preserveSoftAP: cameraPathReady())
         feedRecoveryTask?.cancel()
         feedRecovering = false
         sessionRecoveryGeneration += 1
@@ -5483,14 +5829,12 @@ final class CameraSession {
         var attemptedDatalink: DatalinkDriver?
         do {
             try Task.checkCancellation()
-            try await WiFiJoiner.waitUntilCameraPathReady(timeout: 8)
+            // Station drivers check the hotspot path themselves in open().
+            if connectionSetup == .cameraWiFi {
+                try await WiFiJoiner.waitUntilCameraPathReady(timeout: 8)
+            }
             try Task.checkCancellation()
-            let dl = DatalinkDriver(
-                port: UInt16(camera.model.datalinkPort),
-                tcpPoke: camera.model.tcpPoke,
-                pairingToken: camera.model.pairingToken,
-                subscriptionKeys: Commands.subscriptionKeys(for: camera.model)
-            )
+            let dl = makeDatalink(camera)
             wireDatalink(dl)
             datalink = dl
             attemptedDatalink = dl
@@ -5613,14 +5957,19 @@ final class CameraSession {
                 let resolved = GimbalControl.modeFromFamily(family, current: gimbalMode)
                 // Follow-family alone cannot confirm the tilt-lock choice.
                 let reportedMode: GimbalMode? = family == .follow ? nil : resolved
-                gimbalMode =
+                // Per attitude frame: write only on change so the gimbal sheet
+                // does not re-render at the attitude rate.
+                let mode =
                     CameraValuePin.reconcile(
                         &gimbalModePin, reported: reportedMode,
                         now: Date.timeIntervalSinceReferenceDate
                     ) ?? resolved
+                if mode != gimbalMode { gimbalMode = mode }
             }
             lastGimbalAttitudeHex = Duml.hex(frame.payload, limit: 80)
             lastGimbalAttitudeDump = GimbalStick.attitudeAngleDump(frame.payload)
+            levelReading.ingest(frame.payload, now: ProcessInfo.processInfo.systemUptime)
+            judgeWorldLevelSnap()
             let wasTT180 = gimbalStickMapping.commanded180
             gimbalStickMapping.applyAttitude(frame.payload)
             syncGimbalPose()
@@ -5684,15 +6033,17 @@ final class CameraSession {
             let reportedMode: GimbalMode? =
                 gimbalFollowFamilyConfirmed && (gimbalMode == .follow || gimbalMode == .tiltLocked)
                 ? resolved : nil
-            gimbalMode =
+            let mode =
                 CameraValuePin.reconcile(
                     &gimbalModePin, reported: reportedMode, now: Date.timeIntervalSinceReferenceDate
                 ) ?? resolved
+            if mode != gimbalMode { gimbalMode = mode }
             if let speed = params.speed {
-                gimbalSpeed =
+                let reconciled =
                     CameraValuePin.reconcile(
                         &gimbalSpeedPin, reported: speed, now: Date.timeIntervalSinceReferenceDate
                     ) ?? speed
+                if reconciled != gimbalSpeed { gimbalSpeed = reconciled }
             }
         }
         status = s
@@ -5729,9 +6080,13 @@ final class CameraSession {
 
     private func syncGimbalPose() {
         gimbalStickMapping.selfieFlip = status.selfieFlip?.isOn ?? false
-        gimbalPoseViewFlip = gimbalStickMapping.poseViewFlip
-        gimbalPoseInvertPan = gimbalStickMapping.invertPan
-        decoder.poseViewFlip = gimbalPoseViewFlip
+        // Runs per gimbal attitude frame: an unchanged write still notifies
+        // `livePictureViewFlip` readers and the stick pads.
+        let viewFlip = gimbalStickMapping.poseViewFlip
+        if gimbalPoseViewFlip != viewFlip { gimbalPoseViewFlip = viewFlip }
+        let invertPan = gimbalStickMapping.invertPan
+        if gimbalPoseInvertPan != invertPan { gimbalPoseInvertPan = invertPan }
+        decoder.poseViewFlip = viewFlip
         decoder.syncPictureFlip()
     }
 
@@ -5757,7 +6112,9 @@ final class CameraSession {
     }
 
     func rejoinSoftAPAfterInternetHop() async {
-        guard let ssid = cachedSSID ?? joinedSSID, let pass = cachedPassword else { return }
+        guard connectionSetup == .cameraWiFi, let ssid = cachedSSID ?? joinedSSID,
+            let pass = cachedPassword
+        else { return }
         let wpa3 = connectedCamera?.model.wpa3 ?? true
         try? await WiFiJoiner.join(ssid: ssid, passphrase: pass, wpa3: wpa3)
         try? await WiFiJoiner.waitUntilCameraPathReady(timeout: 20)
@@ -6101,6 +6458,10 @@ final class CameraSession {
         case mimoSession
         case staleSoftAP
         case wrongCamera
+        case setupNotSaved
+        case hostWiFi(String)
+        case stationCameraMissing(String)
+        case nanoWake
         var errorDescription: String? {
             switch self {
             case .creds: "couldn't read the camera's Wi-Fi credentials"
@@ -6119,6 +6480,14 @@ final class CameraSession {
                 "iPhone is still on the other camera's Wi-Fi (Pocket and Nano both use 192.168.2.1). Forget that network in Settings → Wi-Fi, then tap Connect. The other camera can stay on."
             case .wrongCamera:
                 "Bluetooth reached a different camera than the one you tapped. Pocket and Nano are separate — pick the Nano or Pocket row in the list."
+            case .setupNotSaved:
+                "this setup's password is missing on this device. Edit the setup and enter it again"
+            case .hostWiFi:
+                "this iPhone could not join the Wi-Fi. Check the password and that the network is in range"
+            case .stationCameraMissing:
+                "the camera joined the Wi-Fi, but this iPhone cannot reach it there. The router is keeping the two apart: on a Wi-Fi 7 router turn off MLO for this network (or add a camera network without it), and turn off client isolation. The Hotspot setup avoids the router"
+            case .nanoWake:
+                "the Nano did not confirm its Wi-Fi wake. Keep it powered on and try again"
             }
         }
     }

@@ -121,16 +121,23 @@
             }
             model.session.liveSignalBars = 4
             model.session.liveFPS = "25.00"
+            var studio = SavedCamera(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                advertisedName: "Studio camera", modelName: "Osmo Pocket 4 Pro",
+                lastConnectedAt: .distantPast, modelId: 0x22)
+            studio.wifiSSID = "Studio-5G"
+            studio.hotspotSSID = "Rig iPhone"
             model.savedCameras = [
-                SavedCamera(
-                    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-                    advertisedName: "Studio camera", modelName: "Osmo Pocket 4 Pro",
-                    lastConnectedAt: .distantPast, modelId: 0x22),
+                studio,
                 SavedCamera(
                     id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
                     advertisedName: "Travel camera", modelName: "Osmo Nano",
                     lastConnectedAt: .distantPast, modelId: 0x19),
             ]
+            if ProcessInfo.processInfo.environment["OPV_UI_REVIEW_CONNECTING"] == "1" {
+                model.session.reviewConnecting(
+                    studio.id, setup: .wifi, progress: "Joining Wi-Fi · attempt 1 of 3")
+            }
             model.isPairingNewCamera = screen == "pair"
             if screen == "settings" { model.liveOperatorPanel = .settings }
             if screen == "media" { model.liveOperatorPanel = .media }

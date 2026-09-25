@@ -123,8 +123,9 @@ write the exception in the table in the same PR.
 | Multiview stage polish | Camera-list grid icon, four-slot grid/Center stage, portrait centered vertical thumbnail strip / landscape trailing strip, floating close/layout/network controls, Clean DISP and supported Auto LUT, Live View record lamp, centered network setup and Add picker, device-only credentials, bounded recovery and borrowed Live View. | Experimental on iOS and Android. Android names the source Phone hotspot (Android offers no Personal Hotspot API or password) and binds LAN sockets to the Wi-Fi network. Borrowed Live View disables Sharing; the relay lifecycle and watcher controls remain single-camera only. Returning to the stage cancels programmed motion and head tracking. Hotspot status is interface detection, not a reliable Settings-switch flag. No frame-accurate synchronization. | Physical iPhone: setup navigation, scan cancellation, all Add buttons, password bounds, touch targets, three-camera portrait/landscape Fit/Fill and tally checks pass. All three feeds resumed after app switching; Pocket 3 took roughly a minute. Borrowed full controls, hotspot transitions and repeated Wi-Fi joins still need physical verification. |
 | Nano transport assembly | Shared length-based assembly across transport groups and length-aware private AVC metadata parsing. | Both shells use shared assembly. Android passes raw access units to MediaCodec, so applying the private metadata filter to its decoder input and physical regression remain pending. | iPhone captured-stream replay: 359/359 decoded, zero errors. Nano normal monitor physically confirmed smooth by the operator; live counters matched ~25 fps with no missing decoded pictures. Android and Pocket regression pending. |
 | Nano frame-queue protection | Preserve AVC parameter sets and IDR when trimming a live frame backlog. | iOS queue uses a latched codec; Android has a different buffering path. The iOS regression fix is not yet physically verified as a stutter fix. | iOS synthetic overload regression plus physical cadence comparison pending |
+| Level | **LEVEL** View Assist in the framing group (after CROSS), tap-only. Camera attitude quaternion (`0x04/0x05` `@24`), not phone IMU. Nikon Z virtual-horizon strips (8 pt dark band (black 32 %), 1 pt white centreline, 2 pt cross-bar marker, zero notches, no glow, faint text-only shadow, number at the start, no end labels, ±8° full scale, centreline/marker/number green < 0.6°): roll 28 tall along the bottom (lift 84 landscape / 22 portrait); tilt centres vertically, right of centre by the same distance roll sits below centre, kept 6 inside the picture. Bubble (±10° ring, 5° inner ring, centre cross, 13 pt bead amber / green) within 25° of plumb, hysteresis 65° / 60°. Dash and `No level data` after 1 s without a valid sample. Gimbal drawer **Double-tap** Recenter / Level (saved, default Recenter) drives stick double-tap and gamepad Circle/B. Level: one `0x04/0x14` target to horizon or plumb, ±0.5° within duration + 1.5 s, else stop and `Couldn't level: N° off`; FPV adds the roll note. | Not in playback. Sharing watcher does not show LEVEL (attitude is not relayed). | **physical** both pending: roll sign on a rolled handle; roll sign in selfie with Selfie Flip on and off; top-down snap with the handle angled. Core and Kotlin fixtures from 1,014 captured frames. |
 | Action 6 body | Live `0x09/0xa8` to `0x41` with no Nano gate and no Pocket `0x02/0x68`; Normal 10-bit `3F` / D-Log M `3D`; Photo `05`; Timelapse `0x02/0x01`; Action `0x02/0xBF` favorite layout; aperture state/capability subscriptions appended after the base keys. APERTURE tile takes the FOCUS slot (`supportsAperture`): live iris `cam_expo_param` `@13`, strategy choices from `camcap_aperture_ctrl_strategy` (captured fallback per exposure/mode), SET `0x02/0x8E` pid `0x0044`. Gimbal, tap focus and focus modes hidden. | Android mirrors the flags, color map and parsers in Kotlin; iOS reads them from the core. | **physical** pending both (loaner returned; Mimo survey only) |
-| Explicit skip | — | VideoToolbox, MetalFX super-res, iOS 26 Liquid Glass API, Frame.io OAuth, LEVEL / De-SQ / MAG | n/a |
+| Explicit skip | — | VideoToolbox, MetalFX super-res, iOS 26 Liquid Glass API, Frame.io OAuth, De-SQ / MAG | n/a |
 
 Datalink bind, ACK, enable-write, and decoder latch facts live in
 [`live-session.md`](live-session.md). Android I/O that implements these rows
@@ -1323,3 +1324,22 @@ recording, promotion, Grid, Fill, DISP clean, Live View round trip, watchdog
 repair and camera Wi-Fi return (one Nano reset failed and succeeded on the next
 close). Pending on Android: Local Wi-Fi join, landscape/tablet, four cameras,
 Pocket 3, app-switch recovery and thermal behavior.
+
+### Per-camera connection setups (discussion #406)
+
+iOS saved cameras carry OpenZCine-style setup chips: **Camera Wi-Fi**, plus
+optional **Wi-Fi** (a router, which the iPhone joins too) and **Hotspot** added
+per camera, for every Osmo body. Both reuse the Multiview station sequence, now
+shared as core `StationJoin`, then verify the camera's `07/07` identity on that
+subnet before registering. Bodies without a captured preview profile (Action,
+360) take its experimental path. A Camera Wi-Fi connect after either sends
+`07/48 00` first to restore the access point. Add setup's camera scan returns
+the camera to its access point on the same link. Core, iOS simulator and
+portrait/landscape UI checks pass. Physical iPhone 16 Pro Max with a Pocket 4 Pro
+(2026-09-24, `PhysicalStationSetupTests`): Add setup › Wi-Fi from the camera scan,
+Wi-Fi from the camera's access point (live 23 s after the join), Camera Wi-Fi
+back (live in 13 s) and Wi-Fi again (24 s) all went live and stayed live.
+
+Exceptions: Android keeps the single camera Wi-Fi path; its Multiview already
+provisions the phone hotspot and a port would reuse `StationJoin` through the
+facade. The hotspot setup and Action 6 still need physical proof.
