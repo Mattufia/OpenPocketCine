@@ -204,7 +204,9 @@ fun MonitorInspector(
                                 .padding(start = 14.dp, end = 10.dp, bottom = 8.dp),
                         ) { navigation(true) }
                     }
-                    Row(if (fit) Modifier.fillMaxWidth() else Modifier.weight(1f).fillMaxWidth()) {
+                    // fill = false under [fit]: the body keeps its own height but never more than
+                    // the frame leaves after the header and footer, so the footer is never squeezed.
+                    Row(Modifier.weight(1f, fill = !fit).fillMaxWidth()) {
                         if (!frame.portrait && hasNavigation) {
                             Box(
                                 Modifier.width(MonitorInspectorPolicy.NAV_WIDTH.dp).fillMaxHeight()
@@ -213,8 +215,7 @@ fun MonitorInspector(
                         }
                         Column(if (fit) Modifier.weight(1f) else Modifier.weight(1f).fillMaxHeight()) {
                             Box(
-                                (if (fit) Modifier else Modifier.weight(1f))
-                                    .fillMaxWidth().padding(horizontal = 12.dp),
+                                Modifier.weight(1f, fill = !fit).fillMaxWidth().padding(horizontal = 12.dp),
                             ) { content() }
                             footer()
                         }
