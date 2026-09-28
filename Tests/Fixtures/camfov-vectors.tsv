@@ -337,6 +337,10 @@ medTeleStops	217	868	-
 medTeleStops	434	868	2.0000,3.0000,4.0000
 medTeleStops	434	651	2.0000,3.0000
 medTeleStops	434	434	2.0000
+medTeleStops	218	868	-
+medTeleStops	324	868	-
+medTeleStops	325	868	2.0000,3.0000,4.0000
+medTeleStops	432	868	2.0000,3.0000,4.0000
 medTeleStops	0	0	-
 zoomStopsLens	Osmo Pocket 3	pocket	0A	1	217	868	1.0000,2.0000,4.0000
 zoomStopsLens	Osmo Pocket 3	pocket	0A	1	434	868	2.0000,3.0000,4.0000

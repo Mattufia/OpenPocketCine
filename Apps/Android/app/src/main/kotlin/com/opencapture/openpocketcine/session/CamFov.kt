@@ -73,12 +73,13 @@ object CamFov {
      * limit is the FORMAT's own digital ceiling (868 at 1080P, 651 at 2.7K, 434 at 4K),
      * so it says nothing about which lens is in front of the sensor.
      *
-     * The camera announces the mode nowhere — no `camcap_*` key carries it and `0x02/0x80`
-     * `@57` never moves — so the raised floor is the only honest signal. It is also the one
-     * that matters: the body clamps an ask to these limits instead of refusing it, so asking
-     * below the floor silently parks the lens on the floor.
+     * `cam_status` `@5` also flips (`0x01` → `0x0D`), but the floor is the signal that
+     * matters: the body clamps an ask to these limits instead of refusing it, so asking
+     * below the floor silently parks the lens there. The test sits halfway between the two
+     * floors, so a one-step wobble on 217 cannot read as Med-Tele and 434 cannot read as off.
      */
-    fun isMedTele(lensMin: Int): Boolean = lensMin > LENS_1X
+    fun isMedTele(lensMin: Int): Boolean = lensMin >= MED_TELE_THRESHOLD
+    private const val MED_TELE_THRESHOLD = LENS_1X + LENS_1X / 2
 
     /**
      * The chip cycle while Med-Tele holds the floor up: whole factors from the body's own

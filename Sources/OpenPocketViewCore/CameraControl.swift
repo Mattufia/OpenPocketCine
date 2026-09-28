@@ -2530,12 +2530,13 @@ public enum CamFov {
     /// 1080P, 651 at 2.7K, 434 at 4K), so it says nothing about which lens is in
     /// front of the sensor.
     ///
-    /// The camera announces the mode nowhere — no `camcap_*` key carries it and
-    /// `0x02/0x80` `@57` never moves — so the raised floor is the only honest
-    /// signal. It is also the one that matters: the body clamps an ask to these
-    /// limits instead of refusing it, so asking below the floor silently parks
-    /// the lens on the floor.
-    public static func isMedTele(lensMin: UInt16) -> Bool { lensMin > lens1x }
+    /// `cam_status` `@5` also flips (`0x01` → `0x0D`), but the floor is the
+    /// signal that matters: the body clamps an ask to these limits instead of
+    /// refusing it, so asking below the floor silently parks the lens there.
+    /// The test sits halfway between the two floors, so a one-step wobble on
+    /// 217 cannot read as Med-Tele and 434 cannot read as off.
+    public static func isMedTele(lensMin: UInt16) -> Bool { lensMin >= medTeleThreshold }
+    static let medTeleThreshold: UInt16 = lens1x + lens1x / 2
 
     /// The chip cycle while Med-Tele holds the floor up: whole factors from the
     /// body's own floor to its own ceiling, which is 2x…4x on a Pocket 3.

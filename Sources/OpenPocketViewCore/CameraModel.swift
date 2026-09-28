@@ -186,8 +186,8 @@ public struct CameraModel: Equatable, Sendable {
     /// caption and the digital-crop warning.
     ///
     /// Decided per body, not read off the cycle's contents. A Pocket 3 has one
-    /// second lens, Med-Tele's 2x, and it is on exactly when the body reports a
-    /// wide limit above 1x — so its optics are [1, 2] then and [1] otherwise,
+    /// second lens, Med-Tele's 2x, and it is on exactly when `CamFov.isMedTele` reads the
+    /// raised floor — so its optics are [1, 2] then and [1] otherwise,
     /// never [1, 3]: the 3x in its 2.7K cycle is a crop. Elsewhere a floor above
     /// 1x can only be a lens the body has put in front, and a 3x in the cycle is
     /// the Pocket 4 Pro's 60 mm tele.

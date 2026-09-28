@@ -82,8 +82,8 @@ public struct CameraStatus: Equatable, Sendable {
     /// `cam_lens_state` u16-LE `@14`. nil until a long enough push arrives.
     public var zoomLens: UInt16?
     /// `cam_lens_state` u16-LE `@10` / `@12`: the wide and tele limits the body
-    /// will accept right now. A floor above `CamFov.lens1x` is Med-Tele, which
-    /// the camera announces nowhere else. nil until a long enough push arrives.
+    /// will accept right now. A floor lifted to 434 is Med-Tele — see
+    /// `CamFov.isMedTele`. nil until a long enough push arrives.
     public var zoomLensMin: UInt16?
     public var zoomLensMax: UInt16?
     /// Hybrid zoom (1.0×…12×). Prefers lens `@14` (monotonic 1×→12× pinch).
