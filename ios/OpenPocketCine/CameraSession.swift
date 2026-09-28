@@ -58,6 +58,10 @@ final class CameraSession {
         set {
             let previous = statusStorage
             statusStorage = newValue
+            if let lock = autoExposureLock, !lock.holds(newValue) { autoExposureLock = nil }
+            if let lock = autoWhiteBalanceLock, !lock.holds(newValue) {
+                autoWhiteBalanceLock = nil
+            }
             guard newValue != previous else { return }
             guard
                 LiveChromeThrottle.shouldNotify(
@@ -72,6 +76,8 @@ final class CameraSession {
         }
     }
     var found: [FoundCamera] = []
+    /// A scan has run 20 s without a camera. The wizard then lists what to check.
+    var scanLooksEmpty = false
     /// The body this session is connecting / connected to. Used to persist a saved camera.
     private(set) var connectedCamera: FoundCamera?
     /// Camera-AP SSID after a successful join. Re-read over BLE on the next connect.
@@ -105,6 +111,9 @@ final class CameraSession {
     @ObservationIgnored var lastKeyframeAge = "—"
     /// OpenZCine `NativeAppModel.liveFPS` — measured live-view delivery, or LINK/FAIL/RECOV.
     var liveFPS = "—"
+    /// Observable mirror of the decoded raster (`HevcDecoder` is not observable).
+    private(set) var pictureAspect: CGFloat = LiveChromeMetrics.feedAspect
+    private(set) var isVerticalPicture = false
     /// OpenZCine `NativeAppModel.liveSignalBars` — 0–4 from `LinkSignalBars` + link-health score.
     var liveSignalBars = 0
     @ObservationIgnored private var frameRate = FrameRateSampler()
@@ -160,6 +169,10 @@ final class CameraSession {
     @ObservationIgnored private var lastFeedFreezeLogAt: Date?
     @ObservationIgnored private var feedRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private var feedRecoveryGeneration = 0
+    /// Repair picture deadlines held off Bluetooth recovery in this stall
+    /// episode (core `nextSessionHoldCycles`), and when the last one was.
+    @ObservationIgnored private var sessionHoldCycles = 0
+    @ObservationIgnored private var lastSessionHoldAt: Date?
     @ObservationIgnored private var foregroundCheckTask: Task<Void, Never>?
     @ObservationIgnored private var foregroundGeneration = 0
     @ObservationIgnored private var statusStorage = CameraStatus()
@@ -178,6 +191,7 @@ final class CameraSession {
     @ObservationIgnored private let log = Logger(
         subsystem: "com.opencapture.openpocketcine", category: "session")
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanHintTask: Task<Void, Never>?
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var connectGeneration = 0
     @ObservationIgnored private var reconnectTarget: UUID?
@@ -329,6 +343,10 @@ final class CameraSession {
     @ObservationIgnored let cameraMedia: CameraMedia
     /// Last tap-to-focus point in feed-normalized 0…1. Always drawn when not tracking.
     var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    /// Feed long-press AE lock. Any status that no longer `holds` it clears it.
+    private(set) var autoExposureLock: AutoExposureLock?
+    /// WB Mode AWB Lock. Cleared like `autoExposureLock` when status stops holding it.
+    private(set) var autoWhiteBalanceLock: AutoWhiteBalanceLock?
     /// Operator-drawn search rect while the camera is still hunting a subject.
     var searchBox: TrackingBox?
     /// Locked subject box. Camera floats when `0xA5` carries them; else a tight stand-in.
@@ -408,6 +426,11 @@ final class CameraSession {
     @ObservationIgnored private var lastFaceAt: Date?
     @ObservationIgnored private var lastFaceHitAt: Date?
     @ObservationIgnored private var lastTapFocusAt: Date?
+    /// Operator tap only; camera-adopted points do not start the stale-echo hold.
+    @ObservationIgnored private var lastFocusTapAt: Date?
+    @ObservationIgnored private var feedDoubleTap = FeedDoubleTapTrack()
+    /// The operator's latest ActiveTrack box, until the camera reports it.
+    @ObservationIgnored private var trackingRequest: (box: TrackingBox, at: Date)?
     private var faceAFArmed = false
     @ObservationIgnored private var faceAFArmTask: Task<Void, Never>?
     /// First GOP has rolled past the IDR grace. Later stalls are the watchdog.
@@ -499,7 +522,8 @@ final class CameraSession {
     @ObservationIgnored private var expoGeneration: UInt64 = 0
     @ObservationIgnored private var audioPin: AudioPin?
     /// After a local res+fps / color SET, ignore subscribe snapshots that have not caught up.
-    @ObservationIgnored private var formatPin: (expected: VideoFormat, deadline: Date)?
+    @ObservationIgnored private var formatPin:
+        (expected: VideoFormat, deadline: Date, shutterAngle: Double?, angleDeadline: Date)?
     @ObservationIgnored private var captureModeGeneration: UInt64 = 0
     @ObservationIgnored private var formatRequestGeneration: UInt64 = 0
     /// FORMAT sheet: skip reseat while `0x02/0x18` is in flight.
@@ -518,6 +542,8 @@ final class CameraSession {
     @ObservationIgnored private var lastGimbalCommand = (x: 0.0, y: 0.0)
     @ObservationIgnored private var gimbalRampFilter = GimbalRampFilter()
     @ObservationIgnored private var gimbalParamPoll = GimbalParamPoll()
+    /// Operator speed/tilt lock held while head tracking or Motion Control runs on Fast.
+    @ObservationIgnored private var gimbalPrep = GimbalPrepRestore()
     @ObservationIgnored private var moveEngine = GimbalMoveEngine()
     @ObservationIgnored private var moveTask: Task<Void, Never>?
     @ObservationIgnored private var lastMoveAttitudeAt: TimeInterval?
@@ -529,14 +555,27 @@ final class CameraSession {
     @ObservationIgnored private var wasRecording = false
     @ObservationIgnored let decoder: HevcDecoder
     var isMultiviewBorrowed = false
+    private(set) var isMultiviewControlsOnly = false
+    @ObservationIgnored var multiviewControlAdmission: (() -> Bool)?
+    private var admitsMultiviewControl: Bool {
+        !isMultiviewControlsOnly || multiviewControlAdmission?() == true
+    }
 
     /// The live-view display layer, for the SwiftUI `VideoView`.
     var videoLayer: AVSampleBufferDisplayLayer { decoder.displayLayer }
 
-    init(borrowing sharedDecoder: HevcDecoder? = nil, cameraMedia: CameraMedia? = nil) {
+    init(
+        borrowing sharedDecoder: HevcDecoder? = nil, cameraMedia: CameraMedia? = nil,
+        controlsOnly: Bool = false
+    ) {
         self.cameraMedia = cameraMedia ?? CameraMedia()
         self.decoder = sharedDecoder ?? HevcDecoder()
         gimbalStickMapping = GimbalStickMapping()
+        if sharedDecoder != nil, controlsOnly {
+            isMultiviewBorrowed = true
+            isMultiviewControlsOnly = true
+            return
+        }
         syncGimbalPose()
         if sharedDecoder != nil {
             isMultiviewBorrowed = true
@@ -563,6 +602,15 @@ final class CameraSession {
                     liveViewEnableSends: self.liveViewEnableSends)
             else { return }
             self.sendRecoverEnable(force: true, reason: "assist VT start")
+        }
+        decoder.onPictureSizeChanged = { [weak self] in
+            guard let self else { return }
+            if self.pictureAspect != self.decoder.pictureAspect {
+                self.pictureAspect = self.decoder.pictureAspect
+            }
+            if self.isVerticalPicture != self.decoder.isVerticalPicture {
+                self.isVerticalPicture = self.decoder.isVerticalPicture
+            }
         }
         decoder.onParameterSetsChanged = { [weak self] in
             guard let self else { return }
@@ -595,23 +643,42 @@ final class CameraSession {
         isFeedWarming = decoder.lastPresentedAt == nil
     }
     func adoptMultiviewPose(_ pose: GimbalStickMapping) {
-        guard isMultiviewBorrowed else { return }
+        guard isMultiviewBorrowed, !isMultiviewControlsOnly else { return }
         gimbalStickMapping = pose
         syncGimbalPose()
     }
     func noteMultiviewFrame() {
-        guard isMultiviewBorrowed else { return }
+        guard isMultiviewBorrowed, !isMultiviewControlsOnly else { return }
         noteLiveFrame()
     }
     func receiveMultiview(_ frame: Duml.Frame) {
         guard isMultiviewBorrowed else { return }
         applyIncomingStatus(frame)
+        guard !isMultiviewControlsOnly else { return }
         // Per tile status frame: an unchanged write re-renders the tile chrome.
         let warming = decoder.lastPresentedAt == nil
         if warming != isFeedWarming { isFeedWarming = warming }
     }
     func releaseMultiview() {
         guard isMultiviewBorrowed else { return }
+        formatPin = nil
+        if isMultiviewControlsOnly {
+            // Detach only this editor's commands. The tile keeps its transport,
+            // decoder callbacks, frame samples, pose and recovery ownership.
+            datalink = nil
+            multiviewControlAdmission = nil
+            phase = .idle
+            inflight.removeAll()
+            inflightPending.removeAll()
+            lateWait.removeAll()
+            coalesceScheduled.removeAll()
+            setMailbox.reset()
+            pairingHold.removeAll()
+            audioTail?.cancel()
+            audioTail = nil
+            failAllWaiters(CancellationError())
+            return
+        }
         endGimbalStick(cancelMove: true)
         stopTrackingPoll()
         tapFocusTask?.cancel()
@@ -638,14 +705,22 @@ final class CameraSession {
         isReconnecting = id != nil
         phase = .scanning
         found = []
+        scanLooksEmpty = false
         scanTask?.cancel()
+        scanHintTask?.cancel()
         scanTask = Task {
             guard await ble.waitUntilPoweredOn(), !Task.isCancelled else {
                 if !Task.isCancelled {
-                    phase = .failed(
-                        "Turn on Bluetooth and allow camera access, then try connecting again.")
+                    ControlLiveLog.line("ble: scan blocked \(ble.stateSummary)")
+                    phase = .failed(ble.unavailableReason)
                 }
                 return
+            }
+            scanHintTask = Task {
+                try? await Task.sleep(for: .seconds(20))
+                guard !Task.isCancelled, phase == .scanning, found.isEmpty else { return }
+                ControlLiveLog.line("ble: no camera after 20 s of scanning \(ble.stateSummary)")
+                scanLooksEmpty = true
             }
             for await camera in ble.scan() {
                 if Task.isCancelled { break }
@@ -700,7 +775,10 @@ final class CameraSession {
         connectGeneration += 1
         let generation = connectGeneration
         LocalVPNProbe.noteIfActive()
+        // Local Network prompt now, while Bluetooth pairs, not during the datalink.
+        LocalNetworkAccess.requestEarly()
         scanTask?.cancel()
+        scanHintTask?.cancel()
         abortInFlightRun(preserveDecoder: preserveMonitor)
         reconnectTarget = nil
         isReconnecting = preserveMonitor
@@ -735,6 +813,8 @@ final class CameraSession {
             releaseMultiview()
             return
         }
+        // Before the link closes: do not leave the camera on Fast for the next session.
+        restoreGimbalPrep(gimbalPrep.restoreNow())
         ReliabilityReporting.setCameraSessionActive(false)
         FeedIncidentRuntime.endSession(now: ProcessInfo.processInfo.systemUptime)
         incidentSessionActive = false
@@ -789,6 +869,8 @@ final class CameraSession {
         zoomPinchSlew = nil
         expoPin = nil
         expoGeneration = 0
+        autoExposureLock = nil
+        autoWhiteBalanceLock = nil
         audioPin = nil
         formatPin = nil
         colorPin = nil
@@ -951,25 +1033,37 @@ final class CameraSession {
         // Camera is still pushing the last GOP. Hold before UDP opens so
         // leftover P-frames cannot set lastPresentedAt and skip first-picture.
         decoder.beginIDRHold()
-        phase = .connectingGatt
-        try await connectBleRetryingDrop(camera)
-        timeline.mark("gatt", now: ProcessInfo.processInfo.systemUptime)
-        try Task.checkCancellation()
-        startFrameRouter()
+        // `0x07/0x45 [00 06]` is a deferred pairing (the camera is still closing a
+        // previous session), not approval. Like Multiview: drop the link, wait, retry.
+        for attempt in 1...3 {
+            phase = .connectingGatt
+            try await connectBleRetryingDrop(camera)
+            if attempt == 1 {
+                timeline.mark("gatt", now: ProcessInfo.processInfo.systemUptime)
+            }
+            try Task.checkCancellation()
+            startFrameRouter()
 
-        // Pair. Wake first (like Mimo), then SetPairingPIN.
-        // First-time pairing shows Approve on the camera and may hold the 0x45 reply
-        // until the user taps — an 8 s wait dies on "Pairing…" as "stopped responding"
-        // while the camera is still waiting. 0x46 can also arrive before 0x45.
-        pairingHold.removeAll()
-        phase = .pairing
-        ble.send(Commands.sessionWake())
-        ble.send(Commands.setPairingPin(pin: camera.model.pairingToken))
-        phase = .awaitingApproval
-        do {
-            try await completePairing()
-        } catch Fail.timeout {
-            throw Fail.pairingTimeout
+            // Pair. Wake first (like Mimo), then SetPairingPIN.
+            // First-time pairing shows Approve on the camera and may hold the 0x45 reply
+            // until the user taps; an 8 s wait dies on "Pairing…" as "stopped responding"
+            // while the camera is still waiting. 0x46 can also arrive before 0x45.
+            pairingHold.removeAll()
+            phase = .pairing
+            ble.send(Commands.sessionWake())
+            ble.send(Commands.setPairingPin(pin: camera.model.pairingToken))
+            phase = .awaitingApproval
+            do {
+                try await completePairing()
+                break
+            } catch Fail.timeout {
+                throw Fail.pairingTimeout
+            } catch Fail.pairingDeferred where attempt < 3 {
+                ControlLiveLog.line("pair: camera deferred pairing (00 06), retry \(attempt) of 2")
+                frameRouter?.cancel()
+                await ble.disconnectAndWait()
+                try await Task.sleep(for: .seconds(3))
+            }
         }
         timeline.mark("pair", now: ProcessInfo.processInfo.systemUptime)
 
@@ -1038,9 +1132,13 @@ final class CameraSession {
             // used to be kept through every failed join (Keychain survives
             // reinstall, and the wizard has no Forget), so the tester in #235
             // could never join again. Drop them; the next tap re-reads over BLE.
-            if credsFromCache {
+            // A missing camera address (Personal Hotspot, slow DHCP) is not a rejected
+            // password; keep the creds for the next tap.
+            if credsFromCache, WiFiJoiner.JoinError.rejectsCredentials(error) {
                 ControlLiveLog.line("creds: join failed with cached creds — dropping cache")
                 forgetWifiCreds(cameraId: camera.id, advertisedName: camera.name, ssid: ssid)
+            } else if credsFromCache {
+                ControlLiveLog.line("creds: join missed the camera address, keeping cache")
             }
             throw error
         }
@@ -1097,6 +1195,8 @@ final class CameraSession {
                 return
             } catch is CancellationError {
                 throw CancellationError()
+            } catch DatalinkDriver.DatalinkError.localNetworkDenied {
+                throw DatalinkDriver.DatalinkError.localNetworkDenied
             } catch {
                 let pathReady = cameraPathReady()
                 if CameraSoftAP.shouldKickAfterHandshakeTimeout(pathReady: pathReady) {
@@ -1391,8 +1491,16 @@ final class CameraSession {
     }
 
     private func route(_ frame: Duml.Frame) {
+        if isMultiviewControlsOnly,
+            CameraParam.isSelfieFlipGetReply(
+                set: frame.cmdSet, cmd: frame.cmdId, payload: frame.payload)
+        {
+            return
+        }
         // First-time pairing approval arrives as a request; answer it or the camera drops the link.
-        if frame.cmdSet == 0x07, frame.cmdId == 0x46, frame.flags == Duml.flagRequest {
+        if !isMultiviewControlsOnly, frame.cmdSet == 0x07, frame.cmdId == 0x46,
+            frame.flags == Duml.flagRequest
+        {
             ble.send(Commands.pairApprovalAck(seq: frame.seq))
         }
         // Pid 0x38 GET is untracked. Completing the shared 0x8E waiter here
@@ -1495,14 +1603,16 @@ final class CameraSession {
     }
 
     /// Success is `0x07/0x45` `[00 01]` (already paired) or a `0x07/0x46` approval
-    /// request (ACKed in `route()`). `[00 02]` means keep waiting for `0x46`.
+    /// request (ACKed in `route()`). `[00 02]` means keep waiting for `0x46`;
+    /// `[00 06]` is deferred (Android Multiview `PairingDeferred`), never success.
     private func completePairing() async throws {
         let frame = try await waitFrame(
             matching: [(0x07, 0x45), (0x07, 0x46)], timeout: .seconds(90))
-        if frame.cmdSet == 0x07, frame.cmdId == 0x45,
-            frame.payload.count >= 2, frame.payload[1] == 0x02
-        {
-            _ = try await waitFrame(0x07, 0x46, timeout: .seconds(90))
+        guard frame.cmdSet == 0x07, frame.cmdId == 0x45, frame.payload.count >= 2 else { return }
+        switch frame.payload[1] {
+        case 0x02: _ = try await waitFrame(0x07, 0x46, timeout: .seconds(90))
+        case 0x06: throw Fail.pairingDeferred
+        default: break
         }
     }
 
@@ -1632,6 +1742,11 @@ final class CameraSession {
     }
 
     func setShootingMode(_ mode: ShootingMode) {
+        guard !isMultiviewControlsOnly || (admitsMultiviewControl && !status.isRecording) else {
+            return
+        }
+        // Return the old mode to Auto before leaving it; the camera keeps Manual per mode.
+        unlockAutoExposure()
         captureModeGeneration &+= 1
         let modeGeneration = captureModeGeneration
         let sessionGeneration = controlGeneration
@@ -1734,6 +1849,16 @@ final class CameraSession {
     }
 
     func setExpoMode(_ mode: ExpoMode) {
+        // Manual from AE-L keeps the pinned values; the camera is already Manual.
+        if mode == .manual, autoExposureLock != nil, status.expoMode == .manual {
+            autoExposureLock = nil
+            return
+        }
+        autoExposureLock = nil
+        if mode != .manual {
+            formatPin?.shutterAngle = nil
+            clearExpoPin(shutter: true)
+        }
         let previous = status.expoMode
         pinExpo(mode: mode)
         status.expoMode = mode
@@ -2359,6 +2484,17 @@ final class CameraSession {
 
     /// Drop `cam_expo_param` snapshots that still show the pre-SET ISO / shutter / EV / mode.
     private func absorbStaleExpo(_ incoming: inout CameraStatus, reported: CameraStatus) {
+        defer {
+            // Exposure reports cannot confirm the requested FORMAT, even when
+            // an early report happens to contain the desired denominator.
+            if let pin = formatPin, let angle = pin.shutterAngle,
+                Date() < pin.angleDeadline, incoming.expoMode == .manual
+            {
+                incoming.shutterDenom = ShutterAngle.denom(
+                    degrees: angle, fps: pin.expected.frameRate.fps,
+                    available: incoming.availableShutterDenoms)
+            }
+        }
         guard var pin = expoPin else { return }
         if Date() >= pin.deadline {
             expoPin = nil
@@ -2400,17 +2536,25 @@ final class CameraSession {
         expoPin = pinIsEmpty(pin) ? nil : pin
     }
 
-    private func absorbStaleFormat(_ incoming: inout CameraStatus, reportedThisFrame: Bool) {
-        guard let pin = formatPin else { return }
-        if Date() >= pin.deadline {
+    private func absorbStaleFormat(_ incoming: inout CameraStatus, reportedThisFrame: Bool)
+        -> Double?
+    {
+        guard let pin = formatPin else { return nil }
+        let deadline = pin.shutterAngle == nil ? pin.deadline : pin.angleDeadline
+        if Date() >= deadline {
             formatPin = nil
-            return
+            if pin.shutterAngle != nil {
+                controlNote = "Frame rate unconfirmed; choose the shutter angle again"
+            }
+            return nil
         }
         if !VideoFormat.absorbStale(
             incoming: &incoming, expected: pin.expected, reportedThisFrame: reportedThisFrame)
         {
             formatPin = nil
+            return pin.shutterAngle
         }
+        return nil
     }
 
     private func absorbStaleColor(_ incoming: inout CameraStatus, reported: CameraStatus) {
@@ -2442,6 +2586,8 @@ final class CameraSession {
     /// Manual-expo rides the same socket right before the shutter SET (Mimo never
     /// round-trips between them; the camera applies datagrams in arrival order).
     func setShutterDenom(_ denom: Int) {
+        // A direct speed choice supersedes an angle waiting for FORMAT.
+        formatPin?.shutterAngle = nil
         if status.expoMode != .manual {
             pinExpo(mode: .manual)
             fireCamera(
@@ -2459,17 +2605,99 @@ final class CameraSession {
             })
     }
 
+    /// Angle is operator intent, never a value inferred back from delayed telemetry.
+    func setShutterAngle(_ degrees: Double) {
+        guard admitsMultiviewControl, datalink != nil, datalink?.isRebuilding != true else {
+            controlNote = "not live"
+            return
+        }
+        guard !status.isPhoto else { return }
+        if let pin = formatPin,
+            Date() >= (pin.shutterAngle == nil ? pin.deadline : pin.angleDeadline)
+        {
+            formatPin = nil
+        }
+        let angle = ShutterAngle.nearestDegrees(degrees)
+        OperatorPrefs.shutterAngleDegrees = angle
+        let denom = ShutterAngle.denom(
+            degrees: angle, fps: status.fps, available: status.availableShutterDenoms)
+        if formatPin != nil, status.expoMode == .manual, !status.isPhoto {
+            formatPin?.shutterAngle = angle
+            pinExpo(shutter: denom)
+            status.shutterDenom = denom
+            return
+        }
+        let previous = status.shutterDenom
+        status.shutterDenom = denom
+        setShutterDenom(denom)
+        if controlNote == "not live" { status.shutterDenom = previous }
+    }
+
+    private func rematchShutterAngle(_ degrees: Double?) {
+        guard let degrees, OperatorPrefs.shutterUsesAngle,
+            status.expoMode == .manual, !status.isPhoto, admitsMultiviewControl,
+            datalink != nil, datalink?.isRebuilding != true
+        else { return }
+        let denom = ShutterAngle.denom(
+            degrees: degrees, fps: status.fps, available: status.availableShutterDenoms)
+        status.shutterDenom = denom
+        let note = controlNote
+        setShutterDenom(denom)
+        if controlNote == nil { controlNote = note }
+    }
+
+    var canLockAutoExposure: Bool {
+        autoExposureLock == nil && AutoExposureLock.capture(status) != nil
+    }
+
+    /// Pins the applied Auto exposure as Manual (no captured native AE lock).
+    /// Manual rides the same socket right before ISO and shutter.
+    @discardableResult
+    func lockAutoExposure() -> Bool {
+        guard autoExposureLock == nil, admitsMultiviewControl, datalink != nil,
+            datalink?.isRebuilding != true, let lock = AutoExposureLock.capture(status)
+        else { return false }
+        setExpoMode(.manual)
+        setISO(lock.isoIndex)
+        setShutterDenom(lock.shutterDenom)
+        autoExposureLock = lock
+        ControlLiveLog.line("ae-lock: ISO \(lock.isoIndex.label) 1/\(lock.shutterDenom)")
+        return true
+    }
+
+    func unlockAutoExposure() {
+        guard autoExposureLock != nil else { return }
+        setExpoMode(.auto)
+    }
+
+    var canLockAutoWhiteBalance: Bool { WhiteBalance.lockingAuto(status) != nil }
+
+    /// Pins the live Auto Kelvin as Custom (no captured native AWB lock). The
+    /// optimistic Custom lands first, so the lock never sees a stale Auto.
+    func lockAutoWhiteBalance() {
+        guard autoWhiteBalanceLock == nil, let wb = WhiteBalance.lockingAuto(status) else { return }
+        setWhiteBalanceCustom(kelvin: wb.kelvin, tint: wb.tint)
+        if status.whiteBalance == wb {
+            autoWhiteBalanceLock = AutoWhiteBalanceLock(kelvin: wb.kelvin)
+        }
+    }
+
     func setWhiteBalanceAuto(tint: Int? = nil) {
+        autoWhiteBalanceLock = nil
         let next = min(max(tint ?? status.whiteBalanceTint ?? 0, -100), 100)
         fireWhiteBalance(.auto(tint: next))
     }
 
     func setWhiteBalanceCustom(kelvin: Int, tint: Int) {
-        fireWhiteBalance(
-            .custom(
-                kelvin: min(max(kelvin, 2_000), 10_000),
-                tint: min(max(tint, -100), 100)
-            ))
+        let wb = WhiteBalance.custom(
+            kelvin: min(max(kelvin, 2_000), 10_000), tint: min(max(tint, -100), 100))
+        // Custom from AWB Lock keeps the locked value; the camera is already there.
+        if autoWhiteBalanceLock != nil, status.whiteBalance == wb {
+            autoWhiteBalanceLock = nil
+            return
+        }
+        autoWhiteBalanceLock = nil
+        fireWhiteBalance(wb)
     }
 
     private func fireWhiteBalance(_ wb: WhiteBalance) {
@@ -2713,6 +2941,9 @@ final class CameraSession {
     func setVideoFormat(
         resolution: VideoResolution, frameRate: VideoFrameRate, fromOperator: Bool = true
     ) {
+        guard !isMultiviewControlsOnly || (admitsMultiviewControl && !status.isRecording) else {
+            return
+        }
         guard currentShootingMode?.offersVideoFormat != false else { return }
         let format = VideoFormat(resolution: resolution, frameRate: frameRate)
         if fromOperator,
@@ -2725,15 +2956,30 @@ final class CameraSession {
         let previousFormat = status.videoFormat
         let previousRes = status.videoResolution
         let previousFps = status.fps
+        let previousShutter = status.shutterDenom
+        let angle = ShutterAngle.rematchesFormat(
+            usesAngle: OperatorPrefs.shutterUsesAngle, manual: status.expoMode == .manual,
+            isPhoto: status.isPhoto, previousFps: previousFps, nextFps: format.frameRate.fps,
+            alreadyPending: formatPin?.shutterAngle != nil)
+            ? formatPin?.shutterAngle ?? OperatorPrefs.shutterAngleDegrees : nil
         formatRequestGeneration &+= 1
         let requestGeneration = formatRequestGeneration
         let modeGeneration = captureModeGeneration
         let sessionGeneration = controlGeneration
-        formatPin = (format, Date().addingTimeInterval(2))
+        // The dependent shutter has a bounded confirmation window beyond the
+        // normal two-second FORMAT projection; no separate command task owns it.
+        let now = Date()
+        formatPin = (format, now.addingTimeInterval(2), angle, now.addingTimeInterval(8))
         var next = status
         next.videoResolution = format.resolution
         next.videoFormat = format
         next.fps = format.frameRate.fps
+        if let angle {
+            let denom = ShutterAngle.denom(
+                degrees: angle, fps: next.fps, available: next.availableShutterDenoms)
+            pinExpo(shutter: denom)
+            next.shutterDenom = denom
+        }
         status = next
         fireCamera(
             Commands.setVideoFormat(
@@ -2750,28 +2996,15 @@ final class CameraSession {
                 self.status.videoFormat = previousFormat
                 self.status.videoResolution = previousRes
                 self.status.fps = previousFps
+                if self.formatPin?.shutterAngle != nil {
+                    self.status.shutterDenom = previousShutter
+                    self.clearExpoPin(shutter: true)
+                }
                 self.formatPin = nil
             })
-        // `fireCamera` clears the note on its way out and only writes one when
-        // the SET could not go. Hold that failure aside: the shutter rematch
-        // below sends again and would clear it along with anything written here.
-        let formatSendNote = controlNote
-        // Angle mode is ours: keep the chosen degrees and rewrite 1/N for the new fps.
-        if OperatorPrefs.shutterUsesAngle, previousFps != status.fps, status.expoMode != .auto {
-            let denom = ShutterAngle.denom(
-                degrees: OperatorPrefs.shutterAngleDegrees,
-                fps: status.fps,
-                available: status.availableShutterDenoms)
-            if denom != status.shutterDenom {
-                setShutterDenom(denom)
-            }
-        }
-        // Settle the note once both sends are done. A failure from either send
-        // outranks the ceiling note, which is only worth showing when the
-        // format change actually went.
-        if let formatSendNote {
-            controlNote = formatSendNote
-        } else if controlNote == nil {
+        // The matching format subscribe owns the shutter rematch. A parallel
+        // shutter SET can land on the old encoder and be reset by FORMAT.
+        if controlNote == nil {
             controlNote = CamFov.ceilingNote(
                 size: format.resolution.sizeTitle,
                 held: zoomCycleFrom,
@@ -2883,15 +3116,34 @@ final class CameraSession {
     }
 
     /// Mimo Fast + tilt unlocked. Untracked — a tracked SET can skip while UDP
-    /// is `.waiting`, and `0x4C` Follow can damp the stick.
+    /// is `.waiting`, and `0x4C` Follow can damp the stick. The operator's
+    /// speed and tilt lock come back once the gimbal is idle (`restoreGimbalPrep`).
     func prepHeadTrackGimbal() {
-        guard !isLocked, datalink != nil else { return }
-        let unlock = Commands.setGimbalTiltLock(.unlocked)
-        let fast = Commands.setGimbalSpeed(.fast)
-        let unlockSeq = datalink?.sendUntracked(unlock) ?? 0
-        let fastSeq = datalink?.sendUntracked(fast) ?? 0
+        guard !isLocked, let datalink else { return }
+        let seqs = gimbalPrep.prep(speed: gimbalSpeed, mode: gimbalMode).map {
+            datalink.sendUntracked($0)
+        }
         ControlLiveLog.line(
-            "head-track: gimbal Fast+unlock unlock seq=\(unlockSeq) fast seq=\(fastSeq)"
+            "head-track: gimbal Fast+unlock seq=\(seqs.map(String.init).joined(separator: ",")) restore speed=\(gimbalPrep.speed?.label ?? "-") mode=\(gimbalPrep.mode?.label ?? "-")"
+        )
+    }
+
+    /// Put back the speed/tilt lock that `prepHeadTrackGimbal` replaced. Pins
+    /// keep a Fast readback already in flight from flashing in the menu.
+    private func restoreGimbalPrep(_ restore: GimbalPrepRestore.Restore?) {
+        guard let restore, let datalink else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        if let speed = restore.speed {
+            gimbalSpeedPin = CameraValuePin(speed, now: now)
+            if gimbalSpeed != speed { gimbalSpeed = speed }
+        }
+        if restore.mode == .tiltLocked, gimbalMode == .follow {
+            gimbalModePin = CameraValuePin(.tiltLocked, now: now)
+            gimbalMode = .tiltLocked
+        }
+        let seqs = restore.frames.map { datalink.sendUntracked($0) }
+        ControlLiveLog.line(
+            "control: gimbal restore speed=\(restore.speed?.label ?? "-") mode=\(restore.mode?.label ?? "-") seq=\(seqs.map(String.init).joined(separator: ","))"
         )
     }
 
@@ -3027,6 +3279,7 @@ final class CameraSession {
     func setGimbalMode(_ mode: GimbalMode) {
         guard canSetGimbalConfiguration else { return }
         cancelProgrammedMove()
+        gimbalPrep.mode = nil
         gimbalFollowFamilyConfirmed = false
         gimbalModePin = CameraValuePin(mode, now: Date.timeIntervalSinceReferenceDate)
         gimbalMode = mode
@@ -3041,6 +3294,7 @@ final class CameraSession {
     func setGimbalSpeed(_ speed: GimbalSpeed) {
         guard canSetGimbalConfiguration else { return }
         cancelProgrammedMove()
+        gimbalPrep.speed = nil
         gimbalSpeedPin = CameraValuePin(speed, now: Date.timeIntervalSinceReferenceDate)
         gimbalSpeed = speed
         let frame = Commands.setGimbalSpeed(speed)
@@ -3106,11 +3360,13 @@ final class CameraSession {
     }
 
     var programmedZoomUnavailableReason: String? {
-        GimbalProgramZoom(program: gimbalProgram, model: connectedCamera?.model, status: status).failureReason
+        GimbalProgramZoom(program: gimbalProgram, model: connectedCamera?.model, status: status)
+            .failureReason
     }
 
     var canRunProgrammedMove: Bool {
-        programmedZoomUnavailableReason == nil && !isFeedWarming && !isLiveVideoStale && gimbalProgram.canRun
+        programmedZoomUnavailableReason == nil && !isFeedWarming && !isLiveVideoStale
+            && gimbalProgram.canRun
             && [gimbalProgram.a, gimbalProgram.b, gimbalProgram.c]
                 .compactMap { $0 }.allSatisfy { $0.nativePitchDeg != nil }
     }
@@ -3182,8 +3438,10 @@ final class CameraSession {
             self.nativeTargetGeneration &+= 1
             let token = self.nativeTargetGeneration
             self.nativeMoveToken = token
-            let zoom = take.changesZoom ? GimbalProgramZoom(
-                program: take, model: self.connectedCamera?.model, status: self.status) : nil
+            let zoom =
+                take.changesZoom
+                ? GimbalProgramZoom(
+                    program: take, model: self.connectedCamera?.model, status: self.status) : nil
             if let reason = zoom?.failureReason {
                 self.cancelProgrammedMove()
                 self.controlNote = reason
@@ -3218,7 +3476,9 @@ final class CameraSession {
     }
 
     func restartProgrammedMove() {
-        guard gimbalControlSceneActive, !isLocked, gimbalMoveRunning, gimbalMovePaused else { return }
+        guard gimbalControlSceneActive, !isLocked, gimbalMoveRunning, gimbalMovePaused else {
+            return
+        }
         cancelProgrammedMove()
         runProgrammedMove()
     }
@@ -3304,12 +3564,20 @@ final class CameraSession {
     }
 
     /// Feed tap: inside the AF-C face box → ActiveTrack SET with that rect.
+    /// A second tap on the same spot → ActiveTrack there (Mimo / on-camera).
     /// Anywhere else → tap-to-focus.
     func handleFeedTap(at normalized: CGPoint) {
         let x = min(max(Double(normalized.x), 0), 1)
         let y = min(max(Double(normalized.y), 0), 1)
         if let box = FaceTrackTap.boxIfTapped(
             overlay: focusOverlay, x: x, y: y, sceneFaces: dimmedFaces)
+        {
+            feedDoubleTap.reset()
+            startTracking(box)
+            return
+        }
+        if let box = feedDoubleTap.register(
+            x: x, y: y, at: Date.timeIntervalSinceReferenceDate)
         {
             startTracking(box)
             return
@@ -3331,6 +3599,7 @@ final class CameraSession {
         cancelTracking(sendClear: isTrackingActive)
         // Hold the tap reticle so AF-C face detect cannot hide it immediately.
         lastTapFocusAt = Date()
+        lastFocusTapAt = Date()
         faceBox = nil
         faceTarget = nil
         lastFaceHitAt = nil
@@ -3377,6 +3646,7 @@ final class CameraSession {
         lastSubjectPushAt = nil
         searchBox = box
         subjectBox = nil
+        trackingRequest = (box, Date())
         isTracking = false
         trackingSawLock = false
         faceBox = nil
@@ -3517,6 +3787,7 @@ final class CameraSession {
         if sendClear { lastOperatorClearAt = Date() }
         lastLiveTrackingAt = nil
         lastSubjectPushAt = nil
+        trackingRequest = nil
         guard sendClear, had, datalink != nil else { return }
         fireCamera(Commands.clearTrackingBox(), name: "Track clear")
     }
@@ -3576,7 +3847,8 @@ final class CameraSession {
             TrackingClearPolicy.shouldApplyLivePush(
                 operatorClearedAt: lastOperatorClearAt, now: Date())
         else { return }
-        guard let box = TrackingBox.parseLivePush(payload) else { return }
+        guard let box = TrackingBox.parseLivePush(payload), acceptsTrackingReport(box)
+        else { return }
         lastSubjectPushAt = Date()
         // Per ActiveTrack push: unchanged writes would still re-render the
         // tracking layer, so publish only what moved.
@@ -3593,7 +3865,9 @@ final class CameraSession {
         guard
             CameraFocusPolicy.shouldAdopt(
                 currentX: Double(focusPoint.x), currentY: Double(focusPoint.y),
-                cameraX: x, cameraY: y)
+                cameraX: x, cameraY: y,
+                secondsSinceTap: fromTrackingBox
+                    ? nil : lastFocusTapAt.map { Date().timeIntervalSince($0) })
         else { return }
         focusPoint = CGPoint(x: x, y: y)
         guard !fromTrackingBox else { return }
@@ -3798,6 +4072,18 @@ final class CameraSession {
         var lastHit: Date
     }
 
+    /// Drop the camera's previous subject until it reports the operator's new box.
+    private func acceptsTrackingReport(_ box: TrackingBox) -> Bool {
+        guard let request = trackingRequest else { return true }
+        guard
+            TrackingStartPolicy.accepts(
+                box, requested: request.box,
+                secondsSinceRequest: Date().timeIntervalSince(request.at))
+        else { return false }
+        trackingRequest = nil
+        return true
+    }
+
     private func smoothedSubject(toward box: TrackingBox) -> TrackingBox {
         let now = Date()
         let dt = lastLiveTrackingAt.map { now.timeIntervalSince($0) } ?? .infinity
@@ -3812,6 +4098,7 @@ final class CameraSession {
         else { return }
         switch TrackingPoll.parse(payload) {
         case .locked(let cameraBox):
+            if let cameraBox, !acceptsTrackingReport(cameraBox) { break }
             if !isTracking { isTracking = true }
             trackingSawLock = true
             if let cameraBox {
@@ -3874,7 +4161,9 @@ final class CameraSession {
         onFail: (@MainActor () -> Void)? = nil,
         onSettle: (@MainActor (Bool) -> Void)? = nil
     ) {
-        guard !Task.isCancelled, datalink != nil, datalink?.isRebuilding != true else {
+        guard !Task.isCancelled, admitsMultiviewControl,
+            datalink != nil, datalink?.isRebuilding != true
+        else {
             controlNote = "not live"
             onFail?()
             onSettle?(false)
@@ -3928,6 +4217,7 @@ final class CameraSession {
     }
 
     private func transmit(_ send: InflightSend, kind: String) {
+        guard admitsMultiviewControl else { return }
         let seq = datalink?.send(send.frame) ?? 0
         let key = Duml.opcodeKey(set: send.frame.cmdSet, cmd: send.frame.cmdId)
         // A skipped UDP write returns seq 0 and lastWriteLanded=false — do
@@ -4059,7 +4349,7 @@ final class CameraSession {
         guard !Task.isCancelled,
             Self.audioControlGeneration.map({ $0 == generation }) ?? true
         else { return false }
-        guard datalink != nil, datalink?.isRebuilding != true else {
+        guard admitsMultiviewControl, datalink != nil, datalink?.isRebuilding != true else {
             controlNote = "not live"
             return false
         }
@@ -4075,6 +4365,7 @@ final class CameraSession {
                 timeout: timeout,
                 consumeHold: false
             ) {
+                guard self.admitsMultiviewControl else { return }
                 let seq = self.datalink?.send(frame) ?? 0
                 if logSend {
                     ControlLiveLog.line(
@@ -4112,8 +4403,9 @@ final class CameraSession {
         let formatReported =
             reported.videoFormat != nil
             || reported.videoResolution != nil || reported.fps > 0
-        absorbStaleFormat(&next, reportedThisFrame: formatReported)
+        let angle = absorbStaleFormat(&next, reportedThisFrame: formatReported)
         status = next
+        rematchShutterAngle(angle)
         let parsed = CameraReply.parse(reply.payload)
         ControlLiveLog.line(
             "control: got \(name) \(opcode) seq=\(reply.seq) flags=0x\(String(reply.flags, radix: 16)) payload=\(Duml.hex(reply.payload)) success=\(parsed.isSuccess)\(late ? " late-hold" : "")"
@@ -4274,7 +4566,7 @@ final class CameraSession {
                     receivedIrap: decoder.sawKeyframe,
                     awaitingIrap: decoder.awaitingIDR,
                     hasDecodableReferences: decoder.canReleaseIDRHold,
-                    lastIrapAge: decoder.lastKeyframeAt.map { wall.timeIntervalSince($0) },
+                    lastIrapAge: decoder.lastIrapAt.map { wall.timeIntervalSince($0) },
                     lastSuccessfulOutputAge: decode.outputAge),
                 lifecycle: FeedIncidentLifecycle(
                     foreground: gimbalControlSceneActive, settingsCovered: incidentSettingsCovered,
@@ -4282,6 +4574,7 @@ final class CameraSession {
                     connected: connectedCamera != nil,
                     liveEstablished: decoder.lastPresentedAt != nil,
                     thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
+                    memoryWarning: DiagnosticCenter.shared.hadRecentMemoryWarning(),
                     lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
                     sceneActive: gimbalControlSceneActive,
                     assistState: decoder.effects.replacesIdentityFeed ? "replacement" : "identity",
@@ -4805,6 +5098,8 @@ final class CameraSession {
             }
             log.info("live: first-picture resend enable (waiting for IDR)")
             guard startCapturedLiveView(reason: "first-picture resend") else { return }
+            recordFeedRepair(
+                "enable", phase: .locallySent, reason: FeedRepairRecord.firstPictureReason)
             liveViewEnableSends += 1
             lastIdrRequest = Date()
             if !decoder.awaitingIDR { idrHoldEnableCount = 0 }
@@ -4866,6 +5161,7 @@ final class CameraSession {
             lastDecoderOutputAge: decoder.nativeOutputAge,
             decoderOutputExpected: decoder.nativeOutputExpected,
             referenceRecoveryNeeded: decoder.referenceRecoveryNeeded,
+            secondsSinceLastIrap: decoder.lastIrapAt.map { now.timeIntervalSince($0) },
             repairReady: decoder.isDisplayReady && !isBrowsingMedia && !status.inPlayback
                 && !liveEnableGate.inFlight
         )
@@ -4983,14 +5279,16 @@ final class CameraSession {
                 // display or in-flight enable is not a failed connection.
                 // Keep this owner and its bounded deadline while gates settle.
                 var sent = false
+                let enableReady = {
+                    self.decoder.isPresentationReady && self.cameraPathReady()
+                        && !self.isBrowsingMedia && !self.status.inPlayback
+                        && !self.liveEnableGate.inFlight
+                }
                 while !Task.isCancelled,
                     self.isLivePictureRepairCurrent(pictureOwner),
                     Date().timeIntervalSince(started) < FeedWatchdog.decoderRepairDeadline
                 {
-                    if self.decoder.isPresentationReady, cameraPathReady(),
-                        !self.isBrowsingMedia, !self.status.inPlayback,
-                        !self.liveEnableGate.inFlight
-                    {
+                    if enableReady() {
                         sent = self.sendRecoverEnable(force: true, reason: "watchdog decoder")
                         if sent { break }
                     }
@@ -5006,9 +5304,45 @@ final class CameraSession {
                     // existing watchdog deadline/path owner handles escalation.
                     return
                 }
-                let restored = await self.waitForRecoveryPicture(
-                    since: started, timeout: .seconds(FeedWatchdog.decoderRepairDeadline),
-                    pictureOwner: pictureOwner)
+                // Resend the keyframe request until an IRAP newer than it lands;
+                // unanswered twice, rebuild the endpoint (FeedWatchdog.decoderRepairStep).
+                var keyframeRequests = 1
+                var restored = false
+                repair: while !Task.isCancelled, self.isLivePictureRepairCurrent(pictureOwner) {
+                    if self.hasFreshRecoveryPicture(since: started) {
+                        restored = true
+                        break
+                    }
+                    let now = Date()
+                    switch FeedWatchdog.decoderRepairStep(
+                        secondsSinceRepairStart: now.timeIntervalSince(started),
+                        secondsSinceLastEnable: now.timeIntervalSince(self.lastIdrRequest),
+                        secondsSinceLastIrap: self.decoder.lastIrapAt.map {
+                            now.timeIntervalSince($0)
+                        },
+                        keyframeRequests: keyframeRequests)
+                    {
+                    case .wait:
+                        break
+                    case .resendKeyframe:
+                        if enableReady(),
+                            self.sendRecoverEnable(force: true, reason: "watchdog keyframe resend")
+                        {
+                            keyframeRequests += 1
+                        }
+                    case .rebuildEndpoint:
+                        self.recordFeedRepair(
+                            "endpoint", phase: .requested, reason: "keyframeUnanswered")
+                        ControlLiveLog.line(
+                            "recovery: action=endpoint effect=requested reason=keyframeUnanswered requests=\(keyframeRequests)"
+                        )
+                        await self.repairDatalink(reason: "keyframe unanswered")
+                        return
+                    case .deadline:
+                        break repair
+                    }
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                }
                 guard !Task.isCancelled, self.isLivePictureRepairCurrent(pictureOwner) else {
                     return
                 }
@@ -5032,6 +5366,7 @@ final class CameraSession {
                     FeedIncidentRuntime.noteExhausted(now: ProcessInfo.processInfo.systemUptime)
                     ControlLiveLog.line(
                         "recovery: action=decoder effect=exhausted reason=pictureDeadline")
+                    self.recordFeedRepair("rejoin", phase: .requested, reason: "pictureDeadline")
                     await self.rejoinDatalinkKeepingLive()
                 }
             }
@@ -5040,6 +5375,7 @@ final class CameraSession {
             log.info("\(self.feedWatchdog.stallLogLine(snap), privacy: .public)")
             ControlLiveLog.line(feedWatchdog.stallLogLine(snap))
             logFeedObserve(snap: snap, watchdog: action)
+            recordFeedRepair("endpoint", phase: .requested, reason: "watchdog")
             rebuildUDPKeepingVT()
         case .fullSessionRejoin:
             // Last rung: the session-preserving rebuild did not bring 9004
@@ -5051,6 +5387,7 @@ final class CameraSession {
             ControlLiveLog.line(feedWatchdog.stallLogLine(snap))
             logFeedObserve(snap: snap, watchdog: action)
             ControlLiveLog.line("feed: watchdog full datalink rejoin")
+            recordFeedRepair("rejoin", phase: .requested, reason: "watchdog")
             startFeedRecovery { [weak self] in
                 await self?.rejoinDatalinkKeepingLive()
             }
@@ -5502,6 +5839,26 @@ final class CameraSession {
             isLivePictureRepairCurrent(pictureOwner)
         else { return .superseded }
         ControlLiveLog.line("feed: endpoint recovery picture deadline expired")
+        let now = Date()
+        let pictureSinceLastHold =
+            lastSessionHoldAt.map { held in
+                decoder.lastPresentedAt.map { $0 > held } ?? false
+            } ?? false
+        sessionHoldCycles = FeedWatchdog.nextSessionHoldCycles(
+            lastVideoPacketAge: driver.lastVideoPacketAt.map { now.timeIntervalSince($0) },
+            previousCycles: sessionHoldCycles, pictureSinceLastCycle: pictureSinceLastHold)
+        lastSessionHoldAt = now
+        if sessionHoldCycles > 0 {
+            // Video still arrives on this socket: a keyframe/decoder stall, not
+            // a lost camera. Keep BLE; the watchdog ladder owns it again, for at
+            // most maxHeldRepairCycles deadlines in this episode.
+            ControlLiveLog.line(
+                "feed: keep BLE, video still arriving; watchdog owns the stall cycle=\(sessionHoldCycles)"
+            )
+            recordFeedRepair("session", phase: .blocked, reason: "videoLive")
+            feedWatchdog = FeedWatchdog()
+            return .exhausted
+        }
         beginSessionRecovery(
             reason: "endpoint recovery has no fresh picture", trigger: .datalinkLost)
         return .exhausted
@@ -5916,7 +6273,7 @@ final class CameraSession {
             if isBrowsingMedia { ingestMediaListFrame(frame) }
             return
         }
-        if frame.cmdSet == 0x02, frame.cmdId == 0x89 {
+        if !isMultiviewControlsOnly, frame.cmdSet == 0x02, frame.cmdId == 0x89 {
             applyLiveTrackingPush(frame.payload)
         }
         var s = status
@@ -5944,12 +6301,22 @@ final class CameraSession {
             formatPin = nil
         }
         absorbStaleExpo(&s, reported: reported)
+        if s.expoMode == .auto, formatPin?.shutterAngle != nil {
+            formatPin?.shutterAngle = nil
+            clearExpoPin(shutter: true)
+        }
         absorbStaleAudio(&s, reported: reported)
         let formatReported =
             reported.videoFormat != nil
             || reported.videoResolution != nil || reported.fps > 0
-        absorbStaleFormat(&s, reportedThisFrame: formatReported)
+        let angle = absorbStaleFormat(&s, reportedThisFrame: formatReported)
         absorbStaleColor(&s, reported: reported)
+        if isMultiviewControlsOnly {
+            if status != s { status = s }
+            rematchShutterAngle(angle)
+            settleLateFromSubscribe()
+            return
+        }
         if frame.cmdSet == 0x04, frame.cmdId == 0x05 {
             requestGimbalParams()
             if frame.payload.count == 50, let family = s.gimbalModeFamily {
@@ -5973,13 +6340,14 @@ final class CameraSession {
             let wasTT180 = gimbalStickMapping.commanded180
             gimbalStickMapping.applyAttitude(frame.payload)
             syncGimbalPose()
-            if frame.payload.count >= 22 {
+            let attitude = GimbalStick.isAttitude(frame.payload)
+            if attitude {
                 lastNativeGimbalWaypoint = GimbalWaypoint.from(
                     yawTenth: GimbalStick.yawTenthDeg(frame.payload),
                     pitchTenth: GimbalStick.pitchTenthDeg(frame.payload), zoom: zoomReadout,
-                    nativePitchTenth: GimbalStick.i16LE(frame.payload, at: 0))
+                    nativePitchTenth: GimbalStick.nativePitchTenthDeg(frame.payload))
             }
-            if frame.payload.count >= 22, let pose = liveGimbalWaypoint {
+            if attitude, let pose = liveGimbalWaypoint {
                 let now = ProcessInfo.processInfo.systemUptime
                 gimbalOverlayMotion.observe(pose, at: now)
                 if let previous = lastMoveObservedPose, let receivedAt = lastMoveAttitudeAt,
@@ -5993,6 +6361,8 @@ final class CameraSession {
                 }
                 if gimbalStickHeld { movePoseStableSince = nil }
                 lastMoveAttitudeAt = now
+                restoreGimbalPrep(
+                    gimbalPrep.restore(busy: nativeHeadToken != nil || gimbalMoveRunning, now: now))
             }
             tickGimbalLimit()
             if gimbalStickMapping.commanded180 != wasTT180 {
@@ -6047,6 +6417,7 @@ final class CameraSession {
             }
         }
         status = s
+        rematchShutterAngle(angle)
         confirmZoomColorHopIfReady()
         if flipReply || flipChanged {
             if flipChanged {
@@ -6450,7 +6821,7 @@ final class CameraSession {
     }
 
     enum Fail: LocalizedError {
-        case creds, timeout, pairingTimeout, disconnected
+        case creds, timeout, pairingTimeout, pairingDeferred, disconnected
         case commandTimeout(String)
         case credsEmpty(String)
         case disconnectedDuring(String)
@@ -6467,6 +6838,7 @@ final class CameraSession {
             case .creds: "couldn't read the camera's Wi-Fi credentials"
             case .timeout: "the camera stopped responding"
             case .pairingTimeout: "pairing timed out — tap Approve on the camera if it asked"
+            case .pairingDeferred: StartupConnectionCopy.pairingDeferred
             case .disconnected: "the camera disconnected"
             case .commandTimeout(let name):
                 "\(name) timed out — camera didn't reply (AP still coming up?)"

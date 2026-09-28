@@ -354,29 +354,6 @@ data class VideoFormat(val resolution: VideoResolution, val frameRate: VideoFram
             return VideoFrameRate.labeledVideo
         }
 
-        /** Tab change: skip the SET when res+fps already match. */
-        fun nextForTab(status: CameraStatus, tab: Int, drum: String): VideoFormat? {
-            val rate = VideoFrameRate.fromDrumLabel(drum) ?: current(status).frameRate
-            val res =
-                resolutions(status.availableVideoFormats, current(status).resolution)
-                    .getOrNull(tab) ?: return null
-            val next = VideoFormat(res, rate)
-            return next.takeIf { it != current(status) }
-        }
-
-        /** Drum row: rate must be on the camcap (or Video 24–60) list. */
-        fun nextForDrum(status: CameraStatus, tab: Int, drum: String): VideoFormat? {
-            val rate = VideoFrameRate.fromDrumLabel(drum) ?: return null
-            val current = current(status)
-            val res =
-                resolutions(status.availableVideoFormats, current.resolution)
-                    .getOrNull(tab) ?: current.resolution
-            val rates = frameRates(
-                status.availableVideoFormats, res, current.frameRate, status.shootingMode,
-            )
-            if (rate !in rates) return null
-            return VideoFormat(res, rate)
-        }
 
         /**
          * Keep the optimistic FORMAT HUD until `cam_video_param_v2` reports the SET.
@@ -392,7 +369,7 @@ data class VideoFormat(val resolution: VideoResolution, val frameRate: VideoFram
             formatReported: Boolean = true,
         ): Pair<CameraStatus, FormatPin?> {
             if (pin == null) return incoming to null
-            if (nowElapsedRealtime >= pin.deadlineElapsedRealtime) return incoming to null
+            if (nowElapsedRealtime >= pin.activeDeadline) return incoming to null
             val incomingFormat = parse(incoming.resolutionCode, incoming.fpsIndex)
             val matched =
                 incomingFormat == pin.expected ||
@@ -408,7 +385,15 @@ data class VideoFormat(val resolution: VideoResolution, val frameRate: VideoFram
     }
 }
 
-data class FormatPin(val expected: VideoFormat, val deadlineElapsedRealtime: Long)
+data class FormatPin(
+    val expected: VideoFormat, val deadlineElapsedRealtime: Long,
+    var shutterAngle: Double? = null,
+    // A dependent shutter waits beyond the ordinary optimistic format window.
+    val angleDeadlineElapsedRealtime: Long = deadlineElapsedRealtime + 6_000L,
+) {
+    val activeDeadline: Long get() =
+        if (shutterAngle != null) angleDeadlineElapsedRealtime else deadlineElapsedRealtime
+}
 
 /** iOS `CameraSession.colorPin` — hold the SET color until subscribe matches. */
 /** iOS `CameraSession.ExpoPin` — hold SET ISO / shutter / EV / mode until subscribe matches. */

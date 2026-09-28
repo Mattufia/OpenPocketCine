@@ -5,7 +5,7 @@ import UIKit
 
 /// Local GPU monitor tools. Peaking, false colour, and zebra measure **source
 /// camera codes** — the same pre-LUT buffer WAVE / HISTO tap. Never the cube look.
-/// False colour IRE / Limits use ``LiveColorScience/monitorIRE`` for the active
+/// False colour IRE / Limits use `ScopeDisplayScale.monitorPercent` for the active
 /// `ColorMode`. LUT and de-squeeze are display-only CI ops. Mirror is a view-space
 /// flip (`MirrorAssist.feedScale`) so it never lands in this graph.
 struct LiveImageEffects: Equatable, Sendable {
@@ -38,6 +38,8 @@ struct LiveImageEffects: Equatable, Sendable {
     var splitVertical = true
     /// Left-to-right monitor flip. Applied in `VideoView`, not this compositor.
     var mirror = false
+    /// Top-to-bottom monitor flip (MIRROR Vertical). Same view-space path as `mirror`.
+    var mirrorVertical = false
     /// Anamorphic display stretch. `1` is off. Anamorphic adapters squeeze the source;
     /// this preview-only correction never changes recordings or scope samples.
     var desqueezeFactor: Double = 1

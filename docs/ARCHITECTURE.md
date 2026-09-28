@@ -89,15 +89,56 @@ only returns the stored row. Button actions retain main-actor ownership. Native
 regression tests invoke the real deferred content off-main. This is for bounded
 option groups, not eager rendering of unbounded media catalogs.
 
-`MultiviewPresentationLayout` computes four persistent tile rectangles and fixed
-transport/control positions. iOS maps the saved arrangement to that policy;
-changing selection or layout never creates a second decoder for the selected
-camera. Tap Layout to switch Grid/Center stage; hold it to open Shared Wi-Fi.
+The shared native `MonitorTabStrip` components draw one baseline and its active
+segment: left for vertical navigation, bottom for horizontal tabs. They add no
+plate, box, fill or inter-tab dividers. Camera/recording controls and navigation
+in Settings, Media, assists and LUT catalogs retain their selection and actions.
+Ordinary setting-value selectors remain separate controls.
+
+`MultiviewPresentationLayout` computes four persistent tile rectangles, the
+Exit/Wi-Fi controls, readouts and the shared collapsible View Assist palette.
+Grid keeps four portrait rows or two landscape columns. Portrait Center stage
+keeps its full-width 16:9 main feed and right-side tools below it. Landscape
+Center stage moves Wi-Fi below Exit, puts tools in the left column, and gives
+its larger 16:9 main feed bottom in-picture readouts. Existing tile metadata
+reserves a separate row above them. A far-right secondary viewport ends above
+native DISP/Record and scrolls three retained camera hosts. Only content alpha
+fades at scrollable edges; no colored overlay or label is painted there. A
+left cutout bounds the palette below the island while preserving native touch
+targets and scrolling. Grid retains the opposite-cutout toolbar policy. Record
+and DISP always reuse the platform's normal Field Monitor geometry.
+
+iOS `MultiviewStageCanvas` retains four child hosting controllers keyed by tile
+identity and moves their existing views between the canvas and native scroll
+view. Scroll changes update a native alpha mask; backdrop preparation reads
+actual converted view bounds and intersects them with the scroll viewport at
+its existing admission cadence. No scroll observer publishes into the camera
+session, and no additional decoder or preview-enable path is created.
+Per-camera options remain available inside every occupied tile, including the
+smaller portrait feeds. One tap selects without changing the arrangement.
 Clean hides the upper session controls and assist palette while retaining DISP
 to restore them. Per-tile recovery, recording acknowledgement and station-network cleanup
 remain in `MultiviewSession`. Its current shared assist control applies Auto LUT
-through the existing per-camera LUT operation. The design's additional multi-feed
+through the existing per-camera LUT operation, enabled by default for newly
+added cameras. Tile batteries and HH:MM:SS timecode reuse Live View presentation.
+Camera options use bounded floating monitor components. Camera settings opens
+from the toolbar with a tab per connected camera. Its editor reuses the Live View setting controls and command settlement,
+with a binding that has no feed ownership. Changing tabs or losing the selected
+connection retires pending edits; opening or closing the editor cannot replace
+the tile's decoder, frame callbacks or network owner. The design's additional multi-feed
 assists require a separate rendering and physical-performance qualification.
+
+Saved-camera Add setup and Multiview use one iOS `StationNetworkSetupView` for
+source choice, current/saved/nearby networks, credentials and scan-to-connect
+handoff. Fixed section headers align the columns through scan state changes;
+Connect and manual network entry stay in the bottom safe/keyboard-adjusted footer. The entry points inject their connection owners. Android Multiview
+uses the equivalent shell form, `StationNetworkSetup`, with injected scan and
+connect actions; its saved-camera setup chips remain a parity exception.
+`MultiviewProvisioner` owns a bounded camera scan and returns the camera to its
+access point on the same BLE link, including cancellation. Multiview journals a
+cleanup obligation immediately before the station setter, removes it only on a
+confirmed return and waits for the scan before stage shutdown. No network form
+owns a live decoder, watchdog or preview-enable path.
 
 Live video and assist views remain mounted beneath settings and media overlays.
 Geometry and chrome changes do not replace their decoder, Metal host, frame bus,

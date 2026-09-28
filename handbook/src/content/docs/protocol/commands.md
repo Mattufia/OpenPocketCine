@@ -27,13 +27,13 @@ model was not recorded. Android physical verification remains pending.
 | `0x00/0x88` | app registration / keepalive | ~1 Hz with the full `17 … APP` payload; video stops ~8–10 s after the last one ([details](../duml-transport/#registration-holds-live-video)) |
 | `0x00/0x99` | subscribe to a status key | battery, storage, mode, ... |
 | `0x02/0x0c` | enter/exit playback | `01 01 00 01` / `01 01 00 00`. Hold with `0x00/0x88` ~1 Hz. Do not poll `0x02/0x8E` while held. |
-| `0x00/0x26` | media list request | cursor `@10` u32-LE; ctr `@4`. Trigger `4a040e10`. Newest page needs no playback; older pages do. |
-| `0x00/0x27` | media list chunks | `[10B sub][chunk]`; subtype `01` is data. Concat in arrival order → CompositePack. |
+| `0x00/0x26` | media list request | cursor `@10` u32-LE; ctr `@4`. Counter 1 SD and counter 2 internal have independent cursors. Trigger `4a040e10`. Newest page needs no playback; older pages do. |
+| `0x00/0x27` | media list chunks | `[10B sub][chunk]`; subtype `04` start, `01` data, `03` end, all per request counter. Concat data per counter in arrival order → CompositePack. ACK-window group 1 must advance while these stream. |
 | `0x00/0x28` | delete media | `[count][handle:u32][counter:u32] 00 [count:u32] 01 01 00 00`. Do not re-send. |
 | `0x02/0xBF` | favorite / star | `01 01 [handle][counter] 00 [on] 00 00 00`. Nano star byte `== 1` only. |
 | HTTP `/v2` | SoftAP file fetch | See [HTTP media](../media/). |
 | `0x0d/0x02` | **battery push** | percent at payload offset 20 |
-| `0x02/0xdc` | **storage push** | SD + internal capacity/free |
+| `0x02/0xdc` | **storage push** | SD + internal capacity/free. Preserve a previously known positive SD capacity across a transient zeroed playback push. |
 | `0x02/0x80` | active-store + playback bit | unsolicited |
 | `0x09/0xa8` | **live-view enable** | starts pktType-0x02 video. Pocket `rcv=0x08`; Nano and Action 6 `rcv=0x41` |
 | `0x02/0x09` | **Nano live gate** | Mimo `00…03` with enable, `00…04` on stop. ACK `00`. Pocket unused |
@@ -57,7 +57,7 @@ model was not recorded. Android physical verification remains pending.
 | `0x02/0x9F` | **audio DSP SET** | same-length blob from GET. Earlier capture values: `@2` wind `1A`/`18`, directional `DA` All / `3A` Front / `BA` Front+back. These are not universal masks: Pocket 3 differs; see the [27-byte observations](../../devices/pocket-3/settings/#audio-dsp-preserve-the-pocket-3-blob). |
 | `0x04/0x4C` | **gimbal command** | `FE 09` is a 180 rotate (stick triple-tap); `FE 08` Mimo recenter-gimbal button (`mimo-gimbal-recenter-20260819`; OPC maps this to stick double-tap); `02 08` Follow / Tilt Locked; `01 08` FPV; `00 08` Direction Lock (keeps world-facing direction as the handle rotates); ACK flags `0x80` `00`. `0x03/0xDA` is register / post-FPV, not recenter. `FE 09` also XORs `0x04/0x27` `@2` bit `0x40` ~1 s later |
 | `0x04/0x27` | **gimbal face push** | unsolicited ~10 Hz, flags `0x00`, sender `0x04`. `@2` bit `0x40` tracks 180 / `FE 09`, not Control Center Selfie Flip |
-| `0x04/0x05` | **gimbal attitude** | unsolicited ~10 Hz, 50 B. i16-LE @4 in 0.1° yaw; i16-LE @20 in 0.1° pitch (negate for look-up: Mimo stick-down makes `@20` positive). Absolute yaw > 90° is the selfie-facing pose. Joystick pan and `FE 09` both move it. `@2` stays 0 on stick-tilt. Byte `@6` is flags: top two bits are 0 Direction Lock, 1 FPV, 2 Follow family; 3 is not a supported app mode. Bit `04` is base stability, not joystick hold. `@24…@39` are four float32 LE `x, w, y, z` of a unit quaternion mapping world to camera (camera x forward, y up, gravity −y). Gravity in the camera frame gives world tilt (matches `@20`, median 0.02° on 1,014 captured Follow frames) and roll (within 1.1° while the gimbal holds the horizon). Heading is free. Roll sign on a rolled handle is unconfirmed. The LEVEL assist and Double-tap Level read it |
+| `0x04/0x05` | **gimbal attitude** | unsolicited ~10 Hz, 50 B; the app ignores any other length. i16-LE @4 in 0.1° yaw; i16-LE @20 in 0.1° pitch (negate for look-up: Mimo stick-down makes `@20` positive). Absolute yaw > 90° is the selfie-facing pose. Joystick pan and `FE 09` both move it. `@2` stays 0 on stick-tilt. Byte `@6` is flags: top two bits are 0 Direction Lock, 1 FPV, 2 Follow family; 3 is not a supported app mode. Bit `04` is base stability, not joystick hold. `@24…@39` are four float32 LE `x, w, y, z` of a unit quaternion mapping world to camera (camera x forward, y up, gravity −y). Gravity in the camera frame gives world tilt (matches `@20`, median 0.02° on 1,014 captured Follow frames) and roll (within 1.1° while the gimbal holds the horizon). Heading is free. Roll sign on a rolled handle is unconfirmed. The LEVEL assist and Double-tap Level read it |
 | `0x04/0x01` | **gimbal stick** | flags `0x00`, 10 B: two u16-LE axes @0/@4, center 1024 ±550, trailer `00 80 22 00`; no ACK. Extra live X-flip is the rotate-180 button `FE 09` only, latched when the 180 settles (~165°), not at the 90° midpoint. Joystick yaw to 180 is not that 180. Invert pan on TT180. Tilt is not inverted |
 | `0x04/0x14` | **timed gimbal angle (experimental)** | Notify, 8 B: yaw/roll/pitch i16-LE tenths, mode byte, duration u8 tenths of a second. Initial Pocket 4 Pro yaw probe reached +5° in approximately 2 s. Native absolute pitch is attitude i16 `@0`, not negated display pitch at `@20`; small pitch moves/return and three short A→B→C runs verified on Pocket 4 Pro. Mode `05` is absolute yaw/pitch with roll ignored; `04` with zero angles and duration `01` interrupts a move. Expanded model/firmware qualification remains pending. This is one timed movement, not an uploaded A→B→C path. Double-tap Level sends one mode `05` target with the live joint yaw and native pitch = live `@0` minus the world tilt error (captured relation: native = 180° − look-up tilt), then judges arrival on the `@24` quaternion within ±0.5° |
 | `0x04/0x50` | **gimbal params** | GET `01 04 05` → `00 01 04 01 <tilt> 05 01 <speed>`; SET `00 <id> 01 <v>`; param `04` tilt lock `00` Follow / `01` Tilt Locked; param `05` speed `00` Fast / `01` Default / `02` Slow; ACK flags `0x80` `00 00`. FPV does not write param `04` — leftover can stay `01`. Programmed A→B→C dispatches individual native timed-angle commands from the phone. Deadline or feedback failure stops the take. Yaw is unwrapped onto −48…225 (raw −135 at the positive endpoint); mechanical limits do not count as arrival. Direction Lock also reports tilt `01`; identify it through attitude mode family 0. The separate physical joystick-hold Lock Gimbal behavior remains unresolved and paused; Fast presets and saved-angle emulation did not match it |
@@ -95,6 +95,21 @@ Video fallback still requires a confirmed model and normal Video mode. The chang
 has automated coverage on both platforms. The operator confirmed the corrected
 vertical 3K picker on an iPhone on 2026-09-11; Android and on-camera fps-change
 verification remain pending.
+
+## AE and AWB lock
+
+No capture holds a camera-native AE or AWB lock. `0x02/0x68` (classic DUML AE
+Lock Status Set) only appears as payload `08` in the Mimo tap-focus burst and
+before live entry; there is no captured clear or unlock payload, so the apps do
+not send it as a lock. AE lock instead sends `0x02/0x1E` Manual, `0x02/0x2A` at
+the ISO index nearest `cam_expo_param` `@16`, and `0x02/0x28` at the applied
+Auto shutter `@20–22` (nearest `camcap_shutter` entry). Unlock sends
+`0x02/0x1E` Auto. AWB lock sends `0x02/0x2C` Custom at the Auto measurement,
+read as `cam_image_effect` `@5` alone (K/100, 2000–10000 K) because the
+[Action 6 survey](../../devices/action-6/settings/) reported `23 04` while its
+UI read 3500 K. This writes the Auto measurement once, at the operator's
+request; it is still never parsed as the Custom Kelvin. Pocket 3 / 4 Auto
+`@5` has not been compared with Mimo's displayed Kelvin.
 
 ## Camera-metered EV
 

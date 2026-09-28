@@ -6,8 +6,96 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- MIRROR View Assist options on iOS and Android: **Horizontal** (on by
+  default, the existing flip) and **Vertical**. Both on turns the monitor 180°
+  for an underslung camera, such as on a car mount. Live View on every render
+  path, the glass backdrop, the Apple Watch preview and video playback follow
+  it; tap to focus, drag to track, focus and face boxes, the tracking cancel
+  key and LEVEL roll map through it. Recordings and scopes stay unflipped, and
+  Vertical does not change joystick directions.
+- Per-camera **setups** on Android **Your cameras** (discussion #406), matching
+  iOS: each saved camera keeps Camera Wi-Fi and can add **Wi-Fi** (a router this
+  phone joins too) or **Hotspot** (this phone's hotspot) from **Add setup**.
+  Setup chips switch between them, a progress bar shows the four connect steps
+  and a failed connect offers Edit setup, Try again or Camera Wi-Fi. The
+  station sequence moves out of Multiview into a shared Kotlin `StationJoin`,
+  and a Camera Wi-Fi connect after a setup restores the camera's access point
+  first.
+- AE lock on iOS and Android: a still long-press on the live picture locks Auto
+  exposure by pinning the camera's current ISO and shutter as Manual. The focus
+  box turns yellow with an AE-L tag, EXPOSURE reads AE-L, and a sun-and-lock
+  key beside the focus recenter button (left side in portrait) returns to Auto.
+  Choosing Auto or Manual under EXPOSURE also ends the lock; Manual keeps the
+  locked values. The press only buzzes when a lock is possible, so holding the
+  picture in Manual is silent. White balance Mode and the WB tile's drag dial
+  add AWB Lock left of Auto, which sets Custom at the camera's live Auto Kelvin
+  snapped to the Kelvin drum. While locked, WB stays on AWB Lock and the tile
+  reads AWB-L; Auto or Custom releases it, and a WB change on the camera ends
+  it. Neither uses a camera-native lock.
+
 ### Changed
 
+- Android icons match iOS on every shared control: Multiview's LUT tool uses
+  the View Assist LUT glyph and Exit an X, Live View battery, eye, tracking
+  cancel, Fit/Fill, ISO native star, WB Auto and Face Priority badges, the
+  recovery overlay, media selection and share, Settings reset and the Wi-Fi
+  setup rows use the iOS Lucide glyphs. A test keeps both icon sets identical.
+- The Android Wi-Fi and Hotspot setup wizard, on Multiview and on a saved
+  camera's Add setup, now matches iOS page for page: the same sheet and title
+  bar, choice cards, network groups, password and hotspot checklists, pinned
+  Connect button and Multiview's Shared Wi-Fi page. Saved cameras' own Wi-Fi
+  names are no longer offered as Multiview networks.
+- Camera, recording and settings tabs use only a bottom or left edge line with
+  a highlighted selected segment, without boxes, fills or inter-tab dividers.
+  Settings scroll content fades in opacity at available edges; the painted
+  MORE overlay is removed.
+- Multiview Center stage has a larger landscape 16:9 main picture with bottom
+  in-picture readouts, Wi-Fi below Exit, Live View's horizontal View Assist
+  palette floating over the main picture, DISP beside Record and a far-right
+  scrolling strip of three retained camera feeds with soft alpha fades.
+  Landscape Grid uses the same chrome, with DISP kept above Record. Portrait
+  puts Exit and Wi-Fi in the top-left corner; Center stage shows the camera
+  values under the main picture and a fixed tool column beside the other
+  feeds, and Grid runs full-width feeds with the palette right of Record,
+  mirroring DISP. The selected tile shows its camera values inline with the
+  tile footer, and tiles no longer have dark top and bottom gradients.
+- Multiview Camera settings is a side panel like the gimbal drawer: camera tabs
+  across the top, vertical category tabs on the right and a live preview of
+  that camera's feed sized to the panel. Return to Multiview takes Live View's
+  Lock slot and style. Add camera always offers the empty big tile first.
+- Multiview starts newly added cameras with Auto LUT enabled, shows HH:MM:SS
+  timecode and reuses Live View's camera battery gauges. Camera options open in
+  a compact floating menu. The toolbar gains a Camera settings button with
+  a tab for each connected camera, reusing Live View controls while feeds stay
+  on the stage. Exit sits at the top-left with Live View Lock styling; the
+  Wi-Fi icon uses Live View Settings styling. Removing the session heading
+  and tightening the left gutter gives tiles more space.
+- Multiview on iOS and Android uses the Add setup Wi-Fi/hotspot experience:
+  current, saved and nearby networks, automatic camera scanning, remembered
+  passwords, compatibility help and inline retry. iOS shares the same wizard
+  and scan implementation with Add setup. Scan cancellation restores camera
+  Wi-Fi before handing off the Bluetooth link; password entry keeps its layout
+  when the keyboard opens. Fixed headings align both columns; Connect and manual
+  network entry stay in a bottom safe-area/keyboard footer.
+- The on-screen joystick has a Small, Medium or Large size under Settings →
+  Controls (Medium, the default, is about 15% larger than before). On
+  iOS its ink turns dark gray over a bright picture and light over a dark one,
+  from a 4 Hz luma sample of the feed under the stick, because live video on
+  iOS is composited on its own display plane where blend modes have no effect.
+  Android keeps native contrast blending.
+- Double-tapping the same spot on the feed starts object tracking there, as on
+  the camera and Mimo. A new track no longer flashes on a face the camera was
+  tracking before.
+- Live View indicators are glass pills with the icon beside a coloured value:
+  camera battery, phone battery and one link pill that swaps between signal and
+  feed fps on tap. Tool buttons across the app share one system size, and
+  scrollable lists fade at their edges.
+- On iOS the REC setup button shows the current format and colour profile
+  (for example 4K 25p over D-Log2), aligned with the timecode.
+- Refreshed the website with current app captures, iPad and level examples,
+  simpler navigation, and equal iOS and Android open-beta choices.
 - Android Live View uses about half the app CPU on a Galaxy S25 with a live
   Pocket 4 Pro (1.83 to 0.88 G cycles/s with a LUT; 2.07 to 1.12 with LUT,
   PEAK and WAVE), at an unchanged 25 fps. Face AF looks for faces at 10 Hz
@@ -20,13 +108,143 @@ All notable changes to this project are documented here. The format is based on
   55% less for the whole phone. Sideload build 0.1.5 (2) carries it. A `perf` build type and
   `just android-perf-soak` make the measurement repeatable
   ([Android pass](docs/audits/2026-09-24-android-perf-pass.md)).
+- Android `feed: cadence` diagnostics now log IRAP and parameter-set counts,
+  the admission gate state and the decoder's configured, hold and surface state,
+  to help narrow down which gate stops decoding when Live View freezes.
 
 ### Fixed
 
+- Android portrait Live View shows a vertical camera picture whole, like iOS:
+  it fits inside the picture area and rests on the control bar. Sizing it to
+  the area's height clipped both sides on narrow phones.
+- Android pairing no longer stalls before the Bluetooth scan starts. First run
+  asked for Location, Nearby devices and Nearby Wi-Fi together and scanned only
+  when all were granted, so Approximate location or a denied Wi-Fi permission
+  left the camera unfound (Android 12 also ignores a precise-only location
+  request). Discovery now needs only **Nearby devices** on Android 12 and newer
+  (Location plus Location services on Android 10 and 11). Precise Location is
+  asked in Wi-Fi and Hotspot setup, where it shows this phone's Wi-Fi name;
+  joining camera Wi-Fi needs no permission. Once Android stops showing the
+  dialog, **Allow** becomes **Open Settings**; without Nearby devices, **Turn
+  on** falls back to Bluetooth settings. Diagnostics journal scan start, stop, failures
+  and 10 s advert counts, and the report header lists Bluetooth, Location
+  services and each permission.
+- Android pairing tells you to turn off DJI Frame Tap (it blocks pairing and
+  connecting) and force quit DJI Mimo on every phone near the camera: a tip on
+  the first pairing step, a **Still looking** hint after 20 s with no camera,
+  and the end of the error when the camera never answers pairing or the video
+  link. The wording matches iOS.
+- The gimbal joystick no longer stays on Fast after head tracking or a Motion
+  Control take. Both switch the camera to Fast with tilt unlocked; iOS and
+  Android now put back the operator's Speed and Tilt locked setting about a
+  second after the gimbal is released, and before a disconnect. Picking a
+  Speed or Mode mid-run keeps that choice.
+- Motion Control plans each point's tilt from where the camera points at Start
+  (like head tracking and Double-tap Level), so tilting the handle after
+  saving points no longer turns a 38° move into a 110° one.
+- Gimbal attitude (`0x04/0x05`) is read only from the known 50-byte layout on
+  both platforms. Another length used to parse as pan 0 / tilt 0, which could
+  throw Motion Control and head tracking at the wrong pose.
+- The iOS `head-motion` journal row now counts why headphone samples were
+  rejected (stale, stamped in the future, or superseded) with the last
+  rejected age, so a head-tracking report with zero accepted samples is
+  diagnosable.
+- iOS pairing names what blocks it instead of failing at "Step 4" after a minute.
+  A denied **Local Network** permission is detected on the video link within a
+  few seconds and offers **Open Settings**; the permission prompt now appears
+  during pairing, before the link opens. **Personal Hotspot** stops the camera
+  Wi-Fi join with "Turn off Personal Hotspot, then try again." and keeps the
+  saved camera password. A system Bluetooth prompt left open no longer fails
+  the scan, and denied or powered-off Bluetooth get their own messages (the old
+  one asked for "camera access"). The first pairing step says "Before pairing,
+  turn off DJI Frame Tap and force quit DJI Mimo.", a 20-second empty scan
+  repeats it with activation and distance, and video-link and Bluetooth
+  timeouts name it too. A `0x07/0x45 00 06` pairing reply is a deferral, not
+  approval: single-camera pairing reconnects and retries up to twice, as
+  Multiview does. Diagnostics journal Bluetooth state and scan counts, every
+  video-link open step, interface names on Wi-Fi addresses, and a
+  `localNetwork:` header line.
+- iOS reliability reports skip watchdog-termination tracking on development
+  builds (reinstalls read as watchdog kills), keep Sentry's memory, thermal and
+  foreground contexts, and mark memory warnings in feed incidents. The glass
+  backdrop no longer blocks the playback pull thread on the main queue once per
+  frame.
+- Gimbal joystick diagonals move as fast as straight pushes on iOS and Android.
+  Deadzone, response curve and sensitivity now act on the stick's throw length
+  and split back along its direction; per-axis curves ran a full 45 degree
+  throw at about 0.71x. A corner throw is clamped to the stick circle.
+- The AE lock haptic is a stronger double heavy tap on both platforms.
+- Android landscape Live View battery and link pills sit clear of the picture,
+  aligned with the Lock button, instead of overlapping the feed by 6 dp.
+- Android portrait Live View shows the Recenter focus button after an
+  off-centre focus tap, in the same slot as iOS: leading of the joystick, on
+  its bottom edge. The zoom chip (optical and digital-crop ranges) and the
+  portrait storage readout gain the same dark glow as iOS.
+- A selected shutter angle survives frame-rate changes in Live View, Multiview
+  and preset format changes. The matching shutter time is sent after camera
+  format confirmation; opening the picker no longer overwrites the saved angle
+  with a transitional reading.
+- Multiview Exit retries the captured temporary pairing refusal before showing
+  an error, waiting for the old Bluetooth link to close on iOS. Successful
+  cameras are left alone and genuine failures retain their cleanup record.
+- iOS Multiview now forwards lost-frame signals after background suspension to
+  the existing decoder recovery policy. Fresh camera packets no longer hide
+  that failure, and decoder repair retains the camera connection while waiting
+  for a new picture.
+- Android Live View no longer crashes on MediaTek phones when it opens. The
+  decoder's frame buffers were requested without GPU sampling usage, which the
+  Vulkan import requires; MediaTek's graphics driver crashed on them. The
+  native import now also refuses such a buffer and falls back instead of
+  crashing.
+- Live View no longer freezes for up to 8 s after a single lost video packet.
+  The keyframe request is no longer held behind an earlier request the camera
+  already answered. After a reconnect that brings video back without a usable
+  keyframe, the picture is repaired after 15 s instead of staying frozen until
+  the operator leaves.
+- Android Live View no longer crash-loops on MediaTek phones whose Mali driver
+  faults while importing decoder frames into Vulkan. Two launches that die
+  during that import switch Live View to the non-Vulkan path for that app
+  version, and native crash reports now name the phone model and SoC.
+- Feed incident reports are graded by outcome: only incidents whose recovery
+  gave up are errors, interrupted ones are warnings, and recovered or
+  suppressed ones are info.
+- iOS clip playback no longer hangs, and gets closed by the system, when you
+  switch clips while the previous clip's frame is still being processed.
+- Tapping to move focus no longer snaps briefly back to the camera's previous
+  point before settling on the new one.
+- On iOS a vertical camera feed fits whole in portrait above the system bar,
+  without cropping its bottom edge, and Live View refits when the camera flips
+  between horizontal and vertical. Capture value drums open on the current
+  value instead of sliding in.
+- The collapsed View Assist palette always shows the most-used tool.
+- The joystick and gimbal controls on iOS and Android now use the same dark
+  glow as other live-view controls, improving separation from bright footage.
 - Android Live View no longer crashes on some screen sizes while gimbal controls
   are shown. Float rounding could make the Motion editor's default placement
   range empty, and `coerceIn` threw (Sentry OPENPOCKETCINE-ANDROID-6/7/8). The
   exposure meter placement had the same pattern.
+- A frozen picture with video still arriving no longer waits 16 s on one
+  keyframe request. The decoder repair resends the request every 2 s until the
+  camera answers; after two unanswered requests (about 4 s) it renegotiates the
+  camera endpoint, keeping Bluetooth and camera Wi-Fi. Field data: the camera
+  answers in 0.1 to 1.1 s when it answers at all, and on the Pocket 3 the
+  request brought the picture back 0 of 52 times.
+- Pocket 3 "keeps connecting and disconnecting" (iPhone and Android): a repair
+  that runs out of time while the camera is still sending video no longer
+  disconnects Bluetooth and starts a full reconnect. The watchdog takes the
+  stall back and repairs the endpoint instead, for at most three repair cycles
+  (about 60 s) without a picture; then the normal reconnect runs.
+- A video stall with the camera still talking now renegotiates the endpoint
+  1.5 s after its one keyframe request goes unanswered, instead of 5 s. On
+  build 158, 36 of 37 such stalls only recovered after that renegotiation.
+  Zoom, AF-C, gimbal and camera-setting holds still apply.
+- Feed incident telemetry: iOS records the endpoint and rejoin repairs, so
+  `recoveredBy` no longer credits an earlier enable; `lastIrapAge` reports the
+  last keyframe the decoder accepted (Android now fills it too). Android keeps
+  an exhausted or recovered verdict when a disconnect follows, keeps one
+  incident session across automatic reconnects like iOS, and records
+  first-picture resends. An incident still open when the operator disconnects
+  ends as `userEnded` (a warning) on both platforms, not `suppressed`.
 
 - Android: the portrait gimbal panel is only as tall as its content instead of
   a fixed, mostly empty half of the screen.

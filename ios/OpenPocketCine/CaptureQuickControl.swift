@@ -92,13 +92,17 @@ struct CaptureQuickSnapshot: Hashable, Sendable {
             supportsFocusMode: model.session.supportsFocusMode,
             facePriorityExposureEnabled: model.facePriorityExposureEnabled,
             shutterUsesAngle: OperatorPrefs.shutterUsesAngle,
-            shutterAngleDegrees: OperatorPrefs.shutterAngleDegrees)
+            shutterAngleDegrees: OperatorPrefs.shutterAngleDegrees,
+            aeLocked: model.session.autoExposureLock != nil,
+            awbLocked: model.session.autoWhiteBalanceLock != nil,
+            offersAwbLock: model.session.canLockAutoWhiteBalance)
     }
 
     static func primary(
         _ sheet: CaptureSheet, status: CameraStatus, cameraModel: CameraModel? = nil,
         supportsFocusMode: Bool = false, facePriorityExposureEnabled: Bool = false,
-        shutterUsesAngle: Bool = false, shutterAngleDegrees: Double = 180
+        shutterUsesAngle: Bool = false, shutterAngleDegrees: Double = 180, aeLocked: Bool = false,
+        awbLocked: Bool = false, offersAwbLock: Bool = false
     ) -> Self? {
         switch sheet {
         case .iso:
@@ -141,7 +145,7 @@ struct CaptureQuickSnapshot: Hashable, Sendable {
                 selection: status.shutterDenom > 0 ? CamCapShutter.label(status.shutterDenom) : "",
                 context: String(status.fps))
         case .wb:
-            if status.whiteBalance?.mode == .custom {
+            if status.whiteBalance?.mode == .custom, !awbLocked {
                 return Self(
                     kind: .kelvin, title: "WB", options: CaptureLists.kelvinLabels,
                     selection: "\(status.whiteBalanceKelvin)K",
@@ -149,8 +153,10 @@ struct CaptureQuickSnapshot: Hashable, Sendable {
             }
             return Self(
                 kind: .whiteBalanceMode, title: "WB",
-                options: WhiteBalanceMode.allCases.map(\.label),
-                selection: status.whiteBalance?.mode.label ?? "")
+                options: CaptureLists.whiteBalanceModeLabels(
+                    offersLock: awbLocked || offersAwbLock),
+                selection: CaptureLists.whiteBalanceModeSelection(
+                    status.whiteBalance, awbLocked: awbLocked) ?? "")
         case .focus:
             guard supportsFocusMode else { return nil }
             return Self(
@@ -165,8 +171,10 @@ struct CaptureQuickSnapshot: Hashable, Sendable {
                 selection: status.apertureStrategy?.label ?? "")
         case .exposure:
             return Self(
-                kind: .exposure, title: "EXPOSURE", options: ExpoMode.allCases.map(\.label),
-                selection: status.expoMode?.label ?? "")
+                kind: .exposure, title: "EXPOSURE",
+                options: CaptureLists.exposureLabels(aeLocked: aeLocked),
+                selection: CaptureLists.exposureSelection(status.expoMode, aeLocked: aeLocked)
+                    ?? "")
         case .audio:
             guard !status.isPhoto else { return nil }
             return Self(
@@ -271,14 +279,12 @@ struct CaptureQuickSnapshot: Hashable, Sendable {
             }
         case .angle:
             if let degrees = ShutterAngle.parse(value) {
-                OperatorPrefs.shutterAngleDegrees = degrees
-                model.session.setShutterDenom(
-                    ShutterAngle.denom(
-                        degrees: degrees, fps: status.fps,
-                        available: CaptureLists.shutterDenoms(from: status)))
+                model.session.setShutterAngle(degrees)
             }
         case .whiteBalanceMode:
-            if value == WhiteBalanceMode.auto.label {
+            if value == CaptureLists.awbLock {
+                model.session.lockAutoWhiteBalance()
+            } else if value == WhiteBalanceMode.auto.label {
                 model.session.setWhiteBalanceAuto()
             } else {
                 let kelvin =

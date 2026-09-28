@@ -289,6 +289,10 @@ and preferred-size restoration. Preserve actual scope GPU rendering/cadence.
 
 These accepted refinements supersede the corresponding prototype defaults:
 
+- Camera, recording and settings tabs use a single gray edge with an accent
+  selected segment: left for vertical rails, bottom for horizontal strips.
+  The September 27 refinement removes tab fills, boxes and dividers while
+  preserving full touch targets and scrolling.
 - Fresh windowed tools open in the canvas center; saved placement survives.
   Audio opens left/vertical-center, can be dragged, and adds orientation and
   optional per-channel dBFS display preferences.
@@ -488,20 +492,39 @@ prototype implements it. Source `DISP_SECTIONS` 4293–4298, 4470–4490.
 
 ## Multiview
 
-Two arrangements: center stage with secondary strip, and 2×2. Tiles carry name,
-timecode, recording state, ISO/shutter/rate/battery/storage/audio/assist hints as
-space permits; unused slots are explicit Add camera. One tap selects, double-tap
-within 260 ms opens selected full monitor; its back-to-grid control occupies the
-lock slot. Thumbnail order remains stable through selection. Tablet landscape
-uses top/bottom empty picture bands for controls; record shrinks to 64 to fit.
-Layout changes should preserve decoder and tile identity. Reference portrait
-center stage puts full-width 16:9 selected tile above a centered vertical strip;
-the existing production portrait secondary-grid composition must be evaluated
-explicitly against that visual change. Source 5378–5437, 5990–6348.
+The operator-approved September 27 revision supersedes the original Multiview
+reference (source 5378–5437, 5990–6348). Grid fills the available space without
+fixed tile aspect ratios: two columns in landscape, four vertical rows in
+portrait. Center stage keeps a large 16:9 main feed with a trailing landscape
+strip. Portrait keeps the full-width 16:9 main feed and places flexible secondary
+rows below it, beside the right toolbar. Camera identity, reported timecode,
+battery/storage and recording state live inside each feed; no information panel
+occupies the side of a portrait tile. Unknown telemetry stays unknown.
+Short resized windows fit the main picture smaller at 16:9 to keep secondary
+feeds and the toolbar reachable. Very short secondary tiles reduce their
+overlay to identity, battery and options; the options sheet retains full detail.
 
-The palette offers LUT, PEAK, FALSE, ZEBRA, GRID, GUIDES, LIGHTS; per-camera
-transfer selection remains derived from each camera. Record-all UI reflects
-individual reported outcomes. Close confirmation styling is reusable, but its
+The current toolbar reuses the shared collapsible View Assist palette for
+Layout, Camera settings, FIT/FILL and LUT. Grid aligns it with the right control
+column, swapping left for a right-side cutout. Portrait keeps it right, below
+the main feed in Center stage. Landscape Center stage moves Wi-Fi below Close,
+uses a left palette below the cutout band, and expands the main 16:9 picture.
+Its camera readouts sit over the main picture's shaded bottom edge, below the
+other telemetry. The three secondary feeds use a far-right vertical scroll
+viewport above DISP/Record, with conditional top/bottom content-alpha fades.
+No painted fade or MORE label is added. Grid's landscape readouts remain below
+the feeds. Record and DISP keep normal Live View positions and sizes.
+
+One tap selects without changing the arrangement. Per-camera options provide
+Live View, recording, LUT, reconnect and removal as available. Double-tap still
+opens the existing camera's full monitor. The first empty slot offers Add camera;
+other unused slots stay quiet. Layout, selection and rotation retain tile,
+decoder and connection identity. Fit contains the complete source; Fill crops
+inside the tile without stretching it.
+
+The broader reference assist catalog remains future work. The current palette
+uses the existing Auto LUT operation; no new GPU assist or sampling path is
+introduced. Group recording reflects individual reported outcomes. Close confirmation styling is reusable, but its
 prototype text and handler incorrectly stop all recording, reset to station mode,
 and require pairing again. Preserve the existing documented AP-restoration,
 cleanup-ledger, retained assignment and recording-continuity behavior.

@@ -1,5 +1,8 @@
 package com.opencapture.openpocketcine
 
+import com.opencapture.monitorui.MonitorTab
+import com.opencapture.monitorui.monitorScrollFade
+import com.opencapture.monitorui.monitorTabStrip
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -54,7 +57,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -69,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import com.opencapture.monitorui.MonitorJoystickSize
 import com.opencapture.monitorui.MonitorLinkHealth
 import com.opencapture.openpocketcine.assists.CrushClipCompensation
 import com.opencapture.openpocketcine.settings.SettingsFalseColorKey
@@ -138,6 +141,8 @@ object SettingsHelpCopy {
         "Short confirmation pulses for switches, settings, and gimbal limits. A connected controller also rumbles at a stop."
     const val JOYSTICK_SENSITIVITY =
         "How far a stick throw moves the gimbal — on-screen and a connected game controller. Small throws crawl; full throw is fastest. 4 is the captured feel. 5 reaches full speed sooner; 1 is the slowest."
+    const val VIRTUAL_JOYSTICK_SIZE =
+        "How large the on-screen stick is. Medium is the default. Large is easier to grab; Small keeps more of the picture clear."
     const val VIRTUAL_JOYSTICK_INVERT_PAN =
         "Reverse left and right on the on-screen stick. Off is the default. A game controller is unchanged."
     const val VIRTUAL_JOYSTICK_INVERT_TILT =
@@ -159,8 +164,6 @@ object SettingsHelpCopy {
     const val REPORT = "Opens a public issue form on GitHub for this project."
     const val REPORT_PROBLEM =
         "Tell us what happened. Technical details stay off unless you include them. You can attach up to three photos. Sending does not turn on automatic reports."
-    const val SHARE_DIAGNOSTICS =
-        "Saves a report with connection events, warnings, and crashes. No name, location, or Wi-Fi password. Paste the copied text into a bug report."
     const val RELIABILITY_REPORTS =
         "Optional: send crash, hang, live-feed reports and session health counts to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. Automatic reports exclude all images. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below."
     const val RELIABILITY_UNAVAILABLE =
@@ -491,6 +494,7 @@ fun OperatorSetupScreen(model: AppModel, onClose: () -> Unit) {
     ) {
         com.opencapture.openpocketcine.monitor.MonitorPageScaffold(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            navigationWidth = 190f,
             heading = { com.opencapture.openpocketcine.monitor.MonitorPageHeading("Operator Setup", "OPENPOCKETCINE") },
             navigation = { portrait ->
                 Column(
@@ -505,35 +509,22 @@ fun OperatorSetupScreen(model: AppModel, onClose: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             SettingsSessionStatus(isLive, phaseLabel, Modifier.weight(1f))
-                            if (isLive) {
-                                SettingsActionPill(
-                                    "Disconnect",
-                                    OpcIcon.LINK_2_OFF,
-                                    LiveDesign.rec,
-                                    LiveDesign.rec.copy(alpha = .12f),
-                                    onClick = model::disconnect,
-                                )
-                            }
+                            if (isLive) SettingsDisconnectButton(model)
                         }
                     } else {
+                        val railScroll = rememberScrollState()
                         Column(
-                            Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            Modifier.weight(1f).monitorScrollFade(railScroll).verticalScroll(railScroll),
                         ) {
-                            OperatorSettingsTab.entries.forEach { tab ->
-                                SettingsTabButton(tab, model, hapticsEnabled, view, Modifier.fillMaxWidth())
+                            Column(Modifier.fillMaxWidth().monitorTabStrip(vertical = true)) {
+                                OperatorSettingsTab.entries.forEach { tab ->
+                                    SettingsTabButton(tab, model, hapticsEnabled, view, Modifier.fillMaxWidth(), vertical = true)
+                                }
                             }
                         }
                         SettingsSessionStatus(isLive, phaseLabel, Modifier.fillMaxWidth())
-                        if (isLive) {
-                            SettingsActionPill(
-                                "Disconnect",
-                                OpcIcon.LINK_2_OFF,
-                                LiveDesign.rec,
-                                LiveDesign.rec.copy(alpha = .12f),
-                                onClick = model::disconnect,
-                            )
-                        }
+                        // The landscape sidebar button spans the rail.
+                        if (isLive) SettingsDisconnectButton(model, Modifier.fillMaxWidth())
                     }
                 }
             },
@@ -665,18 +656,34 @@ private fun SessionControls(
     }
 }
 
+/** Settings tabs breathe a little more than compact control tabs; the baseline stays continuous. */
+private val SettingsTabGap = 6.dp
+
+@Composable
+private fun SettingsDisconnectButton(model: AppModel, modifier: Modifier = Modifier) {
+    com.opencapture.monitorui.MonitorCameraAction(
+        text = "Disconnect",
+        primary = false,
+        enabled = true,
+        contentDescription = "Disconnect",
+        onClick = model::disconnect,
+        modifier = modifier,
+        destructive = true,
+        icon = { tint -> OpcIcon(OpcIcon.LINK_2_OFF, null, Modifier.size(14.dp), tint) },
+    )
+}
+
 @Composable
 private fun SettingsTabRail(model: AppModel, hapticsEnabled: Boolean, view: View) {
     Column(
         Modifier
             .width(146.dp)
             .fillMaxHeight()
-            .panelGlass(ChromeShape)
-            .padding(6.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+            .monitorTabStrip(vertical = true),
+        verticalArrangement = Arrangement.spacedBy(SettingsTabGap),
     ) {
         OperatorSettingsTab.entries.forEach { tab ->
-            SettingsTabButton(tab, model, hapticsEnabled, view, Modifier.fillMaxWidth())
+            SettingsTabButton(tab, model, hapticsEnabled, view, Modifier.fillMaxWidth(), vertical = true)
         }
     }
 }
@@ -693,10 +700,12 @@ private fun SettingsTabStrip(
         modifier
             .fillMaxWidth()
             .height(44.dp)
+            .monitorScrollFade(scroll, vertical = false)
             .horizontalScroll(scroll)
+            .monitorTabStrip()
             .testTag("monitor.settings.tabs"),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SettingsTabGap),
     ) {
         OperatorSettingsTab.entries.forEach { tab ->
             SettingsTabButton(tab, model, hapticsEnabled, view, Modifier.wrapContentWidth())
@@ -711,50 +720,22 @@ private fun SettingsTabButton(
     hapticsEnabled: Boolean,
     view: View,
     modifier: Modifier = Modifier,
+    vertical: Boolean = false,
 ) {
     val selected = model.operatorSettingsTab == tab
     val bringIntoView = remember { BringIntoViewRequester() }
     LaunchedEffect(selected) { if (selected) bringIntoView.bringIntoView() }
-    Row(
-        modifier
-            .height(44.dp)
-            .background(if (selected) Color.White.copy(alpha = .08f) else Color.Transparent, RoundedCornerShape(9.dp))
-            .bringIntoViewRequester(bringIntoView)
-            .testTag("monitor.settings.tab.${tab.title}")
-            .semantics {
-                contentDescription = tab.title
-                this.selected = selected
-            }
-            .settingsClickable(role = Role.Tab) {
-                if (tab != model.operatorSettingsTab) operatorHaptic(view, hapticsEnabled)
-                model.operatorSettingsTab = tab
-            }
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        Box(
-            Modifier
-                .width(4.dp)
-                .height(24.dp)
-                .background(
-                    if (selected) LiveDesign.accent else LiveDesign.accent.copy(alpha = 0f),
-                    RoundedCornerShape(3.dp),
-                ),
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                tab.title,
-                style = LiveType.ui(12.5f, FontWeight.SemiBold),
-                color = if (selected) LiveDesign.text else LiveDesign.muted,
-                maxLines = 1,
-            )
-            Text(
-                tab.rail,
-                style = LiveType.ui(10f),
-                color = LiveDesign.faint,
-                maxLines = 1,
-            )
+    MonitorTab(selected, onClick = {
+        if (tab != model.operatorSettingsTab) operatorHaptic(view, hapticsEnabled)
+        model.operatorSettingsTab = tab
+    }, modifier = modifier.height(44.dp).bringIntoViewRequester(bringIntoView)
+        .testTag("monitor.settings.tab.${tab.title}"), vertical = vertical,
+        separator = tab != OperatorSettingsTab.entries.first(), accessibilityLabel = tab.title) {
+        Column(Modifier.then(if (vertical) Modifier.fillMaxWidth() else Modifier),
+            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(tab.title, style = LiveType.ui(12.5f, FontWeight.SemiBold),
+                color = if (selected) LiveDesign.accent else LiveDesign.muted, maxLines = 1)
+            Text(tab.rail, style = LiveType.ui(10f), color = LiveDesign.faint, maxLines = 1)
         }
     }
 }
@@ -798,6 +779,7 @@ private fun SettingsContentPane(
                 Column(
                     Modifier
                         .fillMaxSize()
+                        .monitorScrollFade(scroll)
                         .verticalScroll(scroll)
                         .padding(bottom = 22.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -813,9 +795,6 @@ private fun SettingsContentPane(
                         OperatorSettingsTab.STORAGE -> StorageRows(model, onClearCache)
                         OperatorSettingsTab.SYSTEM -> SystemRows(model, onLegal)
                     }
-                }
-                if (scroll.canScrollForward) {
-                    ScrollMoreCue(Modifier.align(Alignment.BottomCenter))
                 }
             }
         }
@@ -1318,10 +1297,28 @@ private fun ControlsRows(model: AppModel) {
             }
         }
         SettingsRowCard(title = "On-screen joystick") {
+            SettingsInlineRow(
+                title = "Size",
+                help = SettingsHelpCopy.VIRTUAL_JOYSTICK_SIZE,
+                showTopDivider = false,
+                stacked = true,
+            ) {
+                SettingsSegmented(
+                    options = MonitorJoystickSize.entries.map { it.label },
+                    selected = model.virtualJoystickSize.label,
+                    compact = true,
+                    testTag = "gimbal.virtual.size",
+                ) { label ->
+                    val next = MonitorJoystickSize.fromLabel(label)
+                    if (next != model.virtualJoystickSize) {
+                        operatorHaptic(view, model.hapticsEnabled)
+                        model.updateVirtualJoystickSize(next)
+                    }
+                }
+            }
             SettingsSwitchInlineRow(
                 title = "Invert pan",
                 help = SettingsHelpCopy.VIRTUAL_JOYSTICK_INVERT_PAN,
-                showTopDivider = false,
                 isOn = model.virtualJoystickInvertPan,
                 testTag = "gimbal.virtual.invertPan",
             ) {
@@ -1817,31 +1814,5 @@ private fun SettingsLiveTile(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun ScrollMoreCue(modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .height(58.dp)
-            .background(
-                Brush.verticalGradient(listOf(LiveDesign.surface.copy(alpha = 0f), LiveDesign.surface)),
-            )
-            .padding(bottom = 13.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Bottom,
-    ) {
-        Text(
-            "MORE",
-            style = LiveType.mono(9.5f, FontWeight.Bold).copy(letterSpacing = 1.2.sp, color = LiveDesign.muted),
-        )
-        OpcIcon(
-            icon = OpcIcon.CHEVRON_DOWN,
-            contentDescription = null,
-            tint = LiveDesign.muted,
-            modifier = Modifier.size(10.dp),
-        )
     }
 }

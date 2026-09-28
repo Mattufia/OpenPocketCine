@@ -16,6 +16,27 @@ options → Save diagnostic report**. Local VPNs and ad blockers (AdGuard, Bloka
 RethinkDNS) can block the UDP live feed after Wi-Fi joins — pause them or
 exclude this app ([Troubleshooting](../../guides/troubleshooting/)).
 
+## Before pairing
+
+Before pairing, turn off DJI Frame Tap and force quit DJI Mimo. Frame Tap blocks
+any pairing or connection, and DJI Mimo on this phone or any other phone near
+the camera can hold it. The first pairing step shows this as a tip. After 20
+seconds with no camera, **Still looking** repeats it: "Turn off DJI Frame Tap
+and force quit DJI Mimo on every phone near the camera. Make sure the camera is
+on and activated, then move closer." When the camera never answers pairing or
+the video link, the error message ends with the same reminder.
+
+## Permissions
+
+Pairing asks only for what finding the camera over Bluetooth needs: **Nearby
+devices** on Android 12 and newer, or **Location** on Android 10 and 11 (which
+also need Location turned on to scan). Precise **Location** is asked later, in
+Wi-Fi and Hotspot setup, to show which Wi-Fi this phone is on; only the network
+name is read. Joining the camera's Wi-Fi needs no extra permission. If Android no
+longer shows a permission prompt, the pairing screen's **Open Settings** opens
+this app's page in Android Settings
+([Troubleshooting](../../guides/troubleshooting/)).
+
 On **Your cameras**, PAIRED and NEARBY groups separate remembered cameras from
 new discoveries. Select a camera to see its connection progress and **Cancel**.
 **Pair new camera** opens the guided flow; select a discovered camera, then
@@ -52,6 +73,22 @@ as `EV`. Tap a value for the full details drawer;
 hold or drag for a compact dial. Lift to apply the selected value. Camera controls hold your selection while the
 camera confirms it, so an older status update does not briefly move the dial back.
 A rejected or unconfirmed change returns to the reported camera value after settling.
+Long-press the picture without moving (about 0.6 s, after the haptic) and lift
+to lock exposure while exposure is Auto: the focus box turns yellow with an
+**AE-L** tag, and a sun-and-open-lock key beside the focus recenter button
+returns exposure to Auto (in portrait it sits at the left, beside the View
+Assist tools). **EXPOSURE** reads **AE-L** while locked, and its picker lists
+**AE-L** left of Auto: choose Auto to return to Auto, or Manual to keep the
+locked values as ordinary Manual. The lock switches the camera to Manual at its
+current Auto ISO (nearest whole stop) and shutter; changing shooting mode or an
+Auto report from the camera also ends it. The haptic only comes when a lock is
+possible; a hold in Manual or while locked is silent. Dragging after the hold
+still draws a tracking box. White balance **Mode** and the WB tile's drag dial
+offer **AWB Lock** beside Auto while Auto reports a live Kelvin; it sets Custom
+at that Kelvin, snapped to the Kelvin drum, and keeps tint. While locked, WB
+stays on **AWB Lock** (the tile reads **AWB-L**); choose Auto to return to Auto
+or Custom to keep that Kelvin as ordinary Custom. A WB change on the camera
+also ends the lock. Neither is a camera-native lock and both await hardware testing.
 Use the top shooting-mode control in landscape or REC SETUP → Mode in portrait.
 Record and the Photo shutter have no shooting-mode long-press shortcut.
 In **Photo**, the capture control becomes a shutter and takes a photo immediately,
@@ -152,6 +189,17 @@ existing saved pins stay unchanged.
 LUTs and picture warnings follow the correction, and framing guides align with
 the corrected picture. Desqueeze changes only the display: recordings, shared
 files and scope measurements keep the original image.
+
+### Mirror
+
+Tap **MIRROR** in View Assist to flip the monitor; long-press for its options.
+**Horizontal** flips left-to-right for a camera pointed back at you and is on by
+default. **Vertical** flips top-to-bottom. Turn both on to turn the picture 180°,
+for an underslung camera such as one on a car mount. Tap to focus, drag to
+track, focus and face boxes, and the LEVEL roll reading follow the flipped
+picture. Mirror changes only the display: recordings and scopes stay
+unflipped, and Vertical leaves the joystick directions unchanged. Video
+playback uses the same axes with its own on/off choice.
 
 ## Level
 
@@ -292,13 +340,16 @@ on Pocket 4 Pro. View Assist **ND** is a small chip on the live picture
 switch Stops, ND32, or ND 0.3. It meters against middle gray and suggests
 a screw-on ND to balance the frame. The app cannot set a filter. The gimbal stick and zoom chip sit together as a cluster in the
 trailing-bottom of the picture, same as iOS. A gimbal-controls button sits
-beside zoom (Pocket only). Its trailing drawer has Mode, Speed and Ramp
+beside zoom (Pocket only). The gimbal button keeps its dark readout glow; the joystick uses adaptive
+bright/dark ink without a halo. Its trailing drawer has Mode, Speed and Ramp
 tabs, each with its own dial, showing Follow / Tilt locked / FPV / Direction Lock, Slow / Default / Fast,
 and stick ramp. The Motion Control footer opens the experimental editor for an A→B (optional C) take (set A and B, choose each
 leg’s duration; drag the editor directly). With C set, Smoothness rounds B and shows a dashed curve.
 Zero hits B exactly; higher values bypass B while preserving A/C and total
 duration. There is no artificial speed cap. Moves are experimental: keep
-the camera fixed, rehearse, and check framing before a take. Tilt targets stay
+the camera fixed, rehearse, and check framing before a take. Tilt is planned from
+where the camera points at Start. A take runs the gimbal on Fast; your Speed and
+Tilt locked setting comes back about a second after it stops. Tilt targets stay
 within −44° to +70°. A missed timed
 point stops the move; professional positional/timing accuracy has not been qualified. Stick throw is analog with
 an ease-in curve (small push crawls; full throw is fastest). Direction Lock keeps
@@ -315,6 +366,8 @@ says Gamepad connected or disconnected; unplug rests the stick.
 Operator Setup → Controls → Gamepad shows Connected / Not connected.
 Choose **Gimbal joystick → Left / Right** in the same Controls tab. D-pad shutter
 changes also update the shutter-angle readout when angle display is selected.
+A selected angle is retained when changing frame rate: 180° changes shutter time
+to 1/50 at 25 fps or 1/100 at 50 fps after the camera confirms the new format.
 A gimbal stop pulses only after the head moves then stalls (Haptics
 setting). Capture drums, the zoom disc, and duration dials pulse on
 coarse steps and whole-stop crossings (172° → 180°, 3×, whole seconds), not on every hundredth
@@ -357,7 +410,22 @@ camera file — LUT bake, Bake exposure, and Convert log are iOS only.
 Sharing is unavailable on Android. Experimental **Multiview** opens from the grid
 button in the **Your cameras** header and matches the iPhone flow: choose Local
 Wi-Fi or this phone's hotspot, add up to four cameras, and double-tap a live tile
-for full Live View. The
+for full Live View. Grid fills four portrait rows or two
+landscape columns. Portrait keeps a vertical right toolbar below the wide main
+feed in Center stage, with camera details inside each feed. Landscape Center
+stage enlarges the main 16:9 picture, overlays its readouts at the bottom, and
+puts the other cameras in a scrolling right strip. Content fades softly only at
+edges with more to scroll. Wi-Fi sits below Exit on the left; the tools reuse
+the collapsible View Assist palette. Grid keeps tools in the right control
+column, or left for a right-side cutout. DISP and Record retain Live View positions.
+
+New cameras start with Auto LUT on, HH:MM:SS timecode and Live View battery
+gauges. The **…** menu stays compact over the stage. Exit uses Live View Lock
+styling; Wi-Fi uses Settings styling and opens the shared network wizard.
+**Camera settings** opens a floating popup with a tab for each connected camera
+and Live View's setting controls. Camera, recording and settings tabs have one
+bottom or left edge with a highlighted selection, without tab boxes.
+The
 [Multiview guide](https://openpocketcine.app/docs/guides/multiview-prototype/) describes setup,
 Android differences and validation limits.
 Platform differences, including Frame.io and MetalFX, are listed in
@@ -452,6 +520,14 @@ Operator Setup over live view keeps the video GOP and the live SurfaceView;
 returning to the monitor must not leave a black well. Leaving live view,
 opening clips, or rotating must drop the Vulkan swapchain with the window —
 present after that is a skip, not a crash.
+
+Saved cameras connect over **Camera Wi-Fi** by default. **Add setup** on a
+camera card adds **Wi-Fi** (a router this phone joins too) or **Hotspot** (this
+phone's hotspot): the camera leaves its own access point for that network and
+the app finds it there by its Bluetooth identity. Tap a setup chip to connect
+over it; long-press a Wi-Fi or Hotspot chip to forget it. Choosing Camera
+Wi-Fi again restores the camera's access point first. If a router keeps the
+phone and camera apart (client isolation, MLO on Wi-Fi 7), use Hotspot.
 
 Wi-Fi passwords stay in Keystore, not saved-camera JSON. Pairing and live view
 need a **physical** Android phone.

@@ -56,11 +56,11 @@ enum class LiveAssistTool {
                 MIRROR -> "Mirror"
             }
 
-    /** The fixed camera EV meter, LEVEL and mirror are tap-only toggles. */
+    /** The fixed camera EV meter and LEVEL are tap-only toggles. */
     val hasConfiguration: Boolean
         get() =
             when (this) {
-                EV, LEVEL, MIRROR -> false
+                EV, LEVEL -> false
                 else -> true
             }
 
@@ -273,9 +273,6 @@ enum class ParadeMode(val label: String) {
 
     val laneCount: Int
         get() = if (this == YRGB) 4 else 3
-
-    val laneLabels: List<String>
-        get() = if (this == YRGB) listOf("Y", "R", "G", "B") else listOf("R", "G", "B")
 
     companion object {
         fun fromPersisted(raw: String): ParadeMode =

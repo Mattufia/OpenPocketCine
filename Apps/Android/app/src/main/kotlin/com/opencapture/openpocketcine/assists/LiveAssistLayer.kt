@@ -27,8 +27,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +85,8 @@ fun LiveAssistLayer(
     tracking: com.opencapture.openpocketcine.session.TrackingHud =
         com.opencapture.openpocketcine.session.TrackingHud(),
     showTapFocusBox: Boolean = true,
+    /** AE lock: the focus box turns yellow with an `AE-L` tag. */
+    aeLocked: Boolean = false,
     /** Picture well in the same space as [modifier]; defaults to the layer box. */
     feedFrame: ChromeRect? = null,
     /** Recorded image within the source raster, excluding camera-added padding. AF keeps [feedFrame]. */
@@ -96,7 +96,9 @@ fun LiveAssistLayer(
     /** Audio defaults at the safe leading edge, independent of the expanded palette. */
     audioPlacementFrame: ChromeRect? = null,
     /** Live 180 / MIRROR compose. Defaults to the MIRROR chip. */
-    pictureMirrored: Boolean = state.mirror,
+    pictureMirrored: Boolean = state.mirrorsHorizontally,
+    /** MIRROR Vertical. */
+    pictureFlippedVertically: Boolean = state.flipsVertically,
     onOpenOptions: ((LiveAssistTool, ChromeRect) -> Unit)? = null,
     showsAudio: Boolean = true,
     /** WAVE / PARADE / FALSE ruler. Playback passes clip color; live uses [CameraStatus.monitorColorMode]. */
@@ -112,8 +114,7 @@ fun LiveAssistLayer(
     state.acceptScopeBundle(LiveScopeSampleBus.bundle)
     BoxWithConstraints(
         modifier
-            .fillMaxSize()
-            .onGloballyPositioned { GpuOverlayBus.layerRoot = it.positionInRoot() },
+            .fillMaxSize(),
     ) {
         val canvas =
             AssistRect(0f, 0f, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
@@ -174,7 +175,9 @@ fun LiveAssistLayer(
                     hud = tracking,
                     focus = focus,
                     mirrored = pictureMirrored,
+                    flippedVertically = pictureFlippedVertically,
                     showTapFocusBox = showTapFocusBox && focus != null,
+                    aeLocked = aeLocked,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

@@ -25,6 +25,10 @@ A branch that touches only test targets is exempt on both platforms: no test
 source ships in an archive or an upload, so there is nothing testers have not
 already been asked to try. CI skips the requirement for those paths.
 
+Android's `src/debug/` source set is exempt on the same grounds. The Play
+artifact is the release variant, which never merges it, so a debug-only change
+reaches no tester.
+
 ## Steps
 
 1. Run `just tester-notes-window`. Completion: the printed list is this PR's

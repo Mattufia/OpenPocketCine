@@ -38,11 +38,13 @@ are valid. Late packets from a retired endpoint cannot seed its replacement.
 ## ACK pump
 
 Window ACK is pktType `0x04` at 40 Hz. Payload is three window groups:
-latest **video** (`0x02`) seq, latest **ackedData** (`0x03`) seq, and a
-third cursor seeded from 34-byte `0x01` telemetry. After the first `0x02`,
-telemetry must not rewind group 0 — that closed HEVC while HUD stayed
-live. After the first `0x03`, telemetry must not rewind group 1 either
-(seq `0` is a valid 8-aligned cursor). Keep TCP 7001 poke
+latest **video** (`0x02`) seq, a shared **reliable command/download** cursor,
+and a third cursor seeded from 34-byte `0x01` telemetry. Command replies advance
+group 1 as pktType `0x03`; media-list `0x00/0x27` chunks advance the same group
+through bytes 18–19 of 34-byte telemetry. Merge the two sources only forward
+modulo `UInt16`. After the first `0x02`, telemetry must not rewind group 0 —
+that closed HEVC while HUD stayed live. Delayed telemetry must not rewind group
+1 either (seq `0` is a valid 8-aligned cursor). Keep TCP 7001 poke
 across UDP rebuilds. Rebuilds negotiate a fresh UDP session and arm `0x02`
 ingest on its handshake ACK. The repair caller sends one enable after successful
 negotiation; old `hadVideo` is not grounds to skip it. Tracked SETs skip a not-ready socket without burning
@@ -56,9 +58,10 @@ AF-C), record/stop, zoom `0xB8` ACK, gimbal params `0x04/0x50`, audio DSP
 `0xA0` — replies as **`0x03`**. Echoing handshake `baseSeq` in group 1
 fills that window (handshake proposes 100). Then SET/GET go silent,
 mailbox retrains, Flip reads stale, and a UDP rebuild that keeps the
-session cannot unstick controls until a fresh handshake. Mimo copies the
-latest `0x03` seq into group 1 (~21 Hz of those packets in a live
-capture). The 40 Hz ACK pump must do the same.
+session cannot unstick controls until a fresh handshake. Mimo advances group 1
+from the active reliable stream. The 40 Hz ACK pump must do the same. During
+media playback, keep presence `0x00/0x88` but suspend the live-only Selfie Flip
+`0x8E` GET; some bodies drop playback when that poll lands.
 
 Gimbal stick `0x04/0x01` is notify (no ACK) and must ride **that same UDP
 queue** at 25 Hz while held — Flip GET already does. **Every** UDP write
@@ -208,6 +211,21 @@ Recovery uses its own RECOV/Reconnecting state. Disconnect resets first-picture
 qualification. Android already uses its retained `hasPicture` state for the
 startup cover. Synthetic native/JVM regressions cover these changes; physical
 camera qualification is still pending.
+
+### Multiview foreground recovery
+
+Multiview retains its assigned cameras and UDP endpoints while inactive. On iOS,
+scene phase and UIKit activity notifications share one idempotent transition.
+The existing one-second monitor resumes the watchdog after its foreground grace.
+Receive-queue discontinuities reach each tile's decoder, and the watchdog sees
+native output age and lost references even when packets and complete access
+units remain fresh. Its decoder action rebuilds presentation, keeps the endpoint,
+sends one enable and waits for fresh source and presentation within the existing
+16-second deadline. It cannot declare success from telemetry or retained pixels.
+A known lost reference chain cannot be released as an ordinary IDR hold.
+Android already forwards discontinuities/epochs and these watchdog fields.
+The iOS native overflow regression fails on the previous wiring and passes with
+this correction; physical background/return qualification is pending.
 
 ## Disconnect teardown
 

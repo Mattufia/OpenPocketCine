@@ -23,6 +23,22 @@ as `EV`. Tap a value for the full details drawer;
 hold or drag for a compact dial. Lift to apply the selected value. Camera controls hold your selection while the
 camera confirms it, so an older status update does not briefly move the dial back.
 A rejected or unconfirmed change returns to the reported camera value after settling.
+Long-press the picture without moving (about 0.6 s, after the haptic) and lift
+to lock exposure while exposure is Auto: the focus box turns yellow with an
+**AE-L** tag, and a sun-and-open-lock key beside the focus recenter button
+returns exposure to Auto (in portrait it sits at the left, beside the View
+Assist tools). **EXPOSURE** reads **AE-L** while locked, and its picker lists
+**AE-L** left of Auto: choose Auto to return to Auto, or Manual to keep the
+locked values as ordinary Manual. The lock switches the camera to Manual at its
+current Auto ISO (nearest whole stop) and shutter; changing shooting mode or an
+Auto report from the camera also ends it. The haptic only comes when a lock is
+possible; a hold in Manual or while locked is silent. Dragging after the hold
+still draws a tracking box. White balance **Mode** and the WB tile's drag dial
+offer **AWB Lock** beside Auto while Auto reports a live Kelvin; it sets Custom
+at that Kelvin, snapped to the Kelvin drum, and keeps tint. While locked, WB
+stays on **AWB Lock** (the tile reads **AWB-L**); choose Auto to return to Auto
+or Custom to keep that Kelvin as ordinary Custom. A WB change on the camera
+also ends the lock. Neither is a camera-native lock and both await hardware testing.
 Capture tabs retain their matching labels while camera updates change the available modes.
 Hold Record to open shooting mode.
 In **Photo**, the capture control becomes a shutter and takes a photo immediately,
@@ -165,6 +181,17 @@ LUTs and picture warnings follow the correction, and framing guides align with
 the corrected picture. Desqueeze changes only the display: recordings, shared
 files and scope measurements keep the original image.
 
+### Mirror
+
+Tap **MIRROR** in View Assist to flip the monitor; long-press for its options.
+**Horizontal** flips left-to-right for a camera pointed back at you and is on by
+default. **Vertical** flips top-to-bottom. Turn both on to turn the picture 180°,
+for an underslung camera such as one on a car mount. Tap to focus, drag to
+track, focus and face boxes, and the LEVEL roll reading follow the flipped
+picture. Mirror changes only the display: recordings and scopes stay
+unflipped, and Vertical leaves the joystick directions unchanged. Video
+playback uses the same axes with its own on/off choice.
+
 ## Level
 
 Enable **LEVEL** in View Assist to see how level the picture is against
@@ -293,14 +320,18 @@ space after rotation or resizing, including saved positions. Long-press a View A
   The gimbal stick
   and zoom chip sit together as a cluster at the lower right: above the camera
   values in portrait and over the picture in landscape, on iPhone and iPad. A
-  gimbal-controls button sits beside zoom (Pocket only). Its trailing drawer
+  gimbal-controls button sits beside zoom (Pocket only). The gimbal button keeps its dark readout glow; the joystick uses adaptive
+  bright/dark ink without a halo.
+  Its trailing drawer
   has Mode, Speed and Ramp tabs, each with its own dial: Follow / Tilt locked / FPV / Direction Lock,
   Slow / Default / Fast, and stick ramp. The Motion Control footer opens the experimental editor for an A→B (optional C) take
   (set A and B, choose each leg’s duration; hold and drag
   anywhere on the editor). With C set, Smoothness rounds the corner near B and shows a dashed curve.
   Zero hits B exactly; higher values bypass B while preserving A/C and total
   duration. There is no artificial speed cap. Moves are experimental: keep the camera fixed, rehearse,
-  and check framing before a take. Programmed and head-tracking tilt targets
+  and check framing before a take. Tilt is planned from where the camera points at Start.
+  Takes and head tracking run the gimbal on Fast; your Speed and Tilt locked setting
+  comes back about a second after they stop. Programmed and head-tracking tilt targets
   stay within −44° to +70°. A missed timed point stops the move;
   professional positional/timing accuracy has not been qualified. Stick
   throw is analog with an ease-in curve (small push crawls; full throw is
@@ -327,7 +358,7 @@ space after rotation or resizing, including saved positions. Long-press a View A
   A toast says Gamepad connected or disconnected; unplug rests the
   stick. Operator Setup → Controls → Gamepad shows Connected / Not
   connected. Choose **Gimbal joystick → Left / Right** in the same Controls tab.
-  D-pad shutter changes also update the shutter-angle readout when angle display is selected.
+  D-pad shutter changes also update the shutter-angle readout when angle display is selected. A selected angle is retained when changing frame rate: 180° changes shutter time to 1/50 at 25 fps or 1/100 at 50 fps after the camera confirms the new format.
   A gimbal stop pulses only after the head moves then stalls
   (Haptics setting). Capture drums, the zoom disc, and duration
   dials pulse on coarse steps and whole-stop crossings (172° → 180°, 3×, whole seconds),
@@ -423,10 +454,23 @@ requests recording together without frame-accurate synchronization. See the
 session network selection, saved preferences and remaining physical checks. Pocket 3, Pocket 4 Pro and
 Nano preview and recording have been checked together on iPhone. Pocket 3
 recovery after an app switch required a full rejoin and roughly a minute in the
-recorded test. Android Multiview remains unavailable.
+recorded test. Android has the matching experimental Multiview stage.
 
-Tap Layout to switch Grid/Center stage; hold Layout for Shared Wi-Fi. Clean
-hides the upper session controls and assist palette; DISP restores them.
+Tap Layout to switch Grid/Center stage. Grid fills four portrait rows or two
+landscape columns. Portrait keeps a vertical right toolbar below the wide main
+feed in Center stage, with camera details inside each feed. Landscape Center
+stage enlarges the main 16:9 picture, overlays its readouts at the bottom, and
+puts the other cameras in a scrolling right strip. Content fades softly only at
+edges with more to scroll. Wi-Fi sits below Exit on the left; the tools reuse
+the collapsible View Assist palette. Grid keeps tools in the right control
+column, or left for a right-side cutout. DISP and Record retain Live View positions.
+
+New cameras start with Auto LUT on, HH:MM:SS timecode and Live View battery
+gauges. The **…** menu stays compact over the stage. Exit uses Live View Lock
+styling; Wi-Fi uses Settings styling and opens the shared network wizard.
+**Camera settings** opens a floating popup with a tab for each connected camera
+and Live View's setting controls. Camera, recording and settings tabs have one
+bottom or left edge with a highlighted selection, without tab boxes.
 
 Motion Control shows A, B and C with their reported pan, tilt and zoom, or
 **Not set**. The joystick remains usable while the editor is open, so you can
@@ -496,8 +540,11 @@ firmware qualification remain pending. See
 
 Verify record start/stop on the camera body until you trust the link.
 
-If live view never starts after Wi-Fi joins, pause local VPNs and ad
-blockers or exclude this app
+Before pairing, turn off DJI Frame Tap and force quit DJI Mimo; either can hold
+the camera. Pairing asks for Bluetooth and Local Network access; if either is
+off, the failure offers **Open Settings**. Personal Hotspot must be off for a
+Camera Wi-Fi connect. If live view never starts after Wi-Fi joins, pause local
+VPNs and ad blockers or exclude this app
 ([Troubleshooting](../../guides/troubleshooting/)).
 
 ## Device requirements

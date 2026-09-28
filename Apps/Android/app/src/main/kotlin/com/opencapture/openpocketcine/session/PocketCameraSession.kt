@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.Surface
 import com.opencapture.openpocketcine.CaptureLists
 import com.opencapture.openpocketcine.CaptureShutterPolicy
+import com.opencapture.openpocketcine.ShutterAngle
 import com.opencapture.openpocketcine.GamepadOperatorAction
 import com.opencapture.openpocketcine.GamepadShutterSync
 import com.opencapture.openpocketcine.EvComp
@@ -38,10 +39,18 @@ import com.opencapture.openpocketcine.diagnostics.RecoveryReason
 import com.opencapture.openpocketcine.BuildConfig
 import android.os.Build
 import java.util.UUID
+import com.opencapture.openpocketcine.multiview.MultiviewDiscovery
+import com.opencapture.openpocketcine.multiview.MultiviewNetworkStore
+import com.opencapture.openpocketcine.multiview.SharedWiFi
+import com.opencapture.openpocketcine.multiview.StationJoin
+import com.opencapture.openpocketcine.multiview.multicamSupport
+import com.opencapture.openpocketcine.multiview.hasMultiviewPreview
 import com.opencapture.openpocketcine.pairing.CameraApJoiner
+import com.opencapture.openpocketcine.pairing.CameraConnectionSetup
 import com.opencapture.openpocketcine.pairing.CameraWifiCredentialStore
 import com.opencapture.openpocketcine.pairing.CameraWifiResolution
 import com.opencapture.openpocketcine.pairing.WifiLowLatencyLock
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +76,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.math.abs
 import kotlin.math.hypot
 import java.util.Locale
+import org.json.JSONObject
 
 /** Main-thread admission closes before negotiation is dispatched to the IO worker. */
 internal class EndpointCommandAdmission {
@@ -145,17 +155,29 @@ internal suspend fun ensureEndpointCommandCurrent(currentGeneration: Long) {
  * BLE → pair → Wi-Fi creds → camera AP → datalink → live HEVC/AVC.
  * Mirrors iOS `CameraSession` recovery, feed watchdog, and operator commands.
  */
-class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : CameraSessionSeam {
+class PocketCameraSession(
+    context: Context, borrowing: HevcDecoder? = null,
+    private val controlLease: MultiviewControlLease? = null,
+) : CameraSessionSeam {
+    init { require(controlLease == null || borrowing != null) }
+    internal val isMultiviewControlOnly: Boolean get() = controlLease != null
+    private fun controlLeaseAllows(): Boolean = controlLease?.allows() != false
+
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val ble = BleLink(context)
     private val joiner = CameraApJoiner(context)
+    /** The operator's Wi-Fi or this phone's hotspot for the Wi-Fi and Hotspot setups (#406). */
+    private val station = SharedWiFi(context)
     internal val cadence = LivePipelineCadence()
     /** Instrumentation only. Invoked after ACK observation; never blocks or delays the receive thread. */
     @Volatile internal var debugVideoPacketAdmission: (() -> Boolean)? = null
     /** Main-thread instrumentation observes actual ACKs/timeouts, never the optimistic HUD. */
     internal var debugCameraSetResult: ((Int, Boolean) -> Unit)? = null
     internal val pendingCameraSetCount: Int get() = inflight.size + inflightPending.size
+    internal fun pendingCameraSetExtra(kind: Int): String? =
+        inflight[SwiftCore.waitKey(kind)]?.extra
+            ?: inflightPending[SwiftCore.waitKey(kind)]?.extra
     private val videoHistory = LiveSessionVideoHistory()
     /**
      * Multiview lends a tile's decoder and verified transport to Live View.
@@ -190,6 +212,11 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     private val wifiLock = WifiLowLatencyLock(appContext)
     private var feedSessionId = UUID.randomUUID().toString()
     private var socketGeneration = 0
+    /** Open from the first LIVE until the operator disconnects (iOS `incidentSessionActive`). */
+    private var incidentSessionActive = false
+    /** Repair deadlines held off Bluetooth recovery this stall episode (core `nextSessionHoldCycles`). */
+    private var sessionHoldCycles = 0
+    private var lastSessionHoldAt: Long? = null
 
     private val _phase = MutableStateFlow(ConnectionPhase.IDLE)
     override val phase: ConnectionPhase get() = _phase.value
@@ -318,6 +345,23 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     var joinedSSID: String? = null
         private set
 
+    /** Setup for the next connect (#406); session recovery reuses it. Disconnect resets it. */
+    var connectionSetup: CameraConnectionSetup = CameraConnectionSetup.CAMERA_WIFI
+        private set
+    /** Network and password a Wi-Fi or Hotspot setup moves the camera onto. */
+    private var stationNetwork: MultiviewNetworkStore.Network? = null
+    /** A camera Wi-Fi connect after a setup that moved the camera sends `07/48 00` first. */
+    private var restoreAccessPoint = false
+    /** Wi-Fi or Hotspot address that answered with this body's BLE identity. */
+    var stationHost: String? = null
+        private set
+    private var stationSeq = 1200
+    /** Station provisioning step; the camera card shows it over the phase label. */
+    private val _setupProgress = MutableStateFlow<String?>(null)
+    val setupProgress: StateFlow<String?> = _setupProgress.asStateFlow()
+    private val cameraPath: CameraNetworkPath
+        get() = if (connectionSetup.movesCamera) station else joiner
+
     /** iOS `CameraSession.supportsFocusMode`. Unknown camera defaults on. */
     val supportsFocusMode: Boolean
         get() {
@@ -397,6 +441,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     private var expoPin: ExpoPin? = null
     private var gimbalModePin: CameraValuePin<GimbalMode>? = null
     private var gimbalSpeedPin: CameraValuePin<GimbalSpeed>? = null
+    /** Operator speed/tilt lock held while Motion Control runs on Fast. */
+    private val gimbalPrep = GimbalPrepRestore()
     private var gimbalFollowFamilyConfirmed = false
     private var shootingModePin: ShootingModePin? = null
     private var whiteBalancePin: WhiteBalancePin? = null
@@ -459,6 +505,9 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     private var faceBox: TrackingBox? = null
     private var sceneFaces: List<TrackingBox> = emptyList()
     private var lastTapFocusAt: Long? = null
+    /** The operator's latest ActiveTrack box, until the camera reports it. */
+    private var trackingRequest: TrackingBox? = null
+    private var trackingRequestAt: Long? = null
     private var lastOperatorClearAt: Long? = null
     private var lastSubjectPushAt: Long? = null
     private var lastLiveTrackingAt: Long? = null
@@ -469,6 +518,14 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     private var trackingPollJob: Job? = null
     private val _trackingHud = MutableStateFlow(TrackingHud())
     val trackingHud: StateFlow<TrackingHud> = _trackingHud.asStateFlow()
+    /** Feed long-press AE lock. Status that no longer `holds` it clears it (core policy). */
+    private val _aeLock = MutableStateFlow<AutoExposureLock?>(null)
+    val aeLock: StateFlow<AutoExposureLock?> = _aeLock.asStateFlow()
+    private var aeLockChecked: Pair<Int, Int>? = null
+    /** WB Mode AWB Lock: the locked Custom Kelvin. Cleared like [aeLock] (core `AutoWhiteBalanceLock`). */
+    private val _awbLockKelvin = MutableStateFlow<Int?>(null)
+    val awbLockKelvin: StateFlow<Int?> = _awbLockKelvin.asStateFlow()
+    private var awbLockChecked: Pair<Int, Int>? = null
     private val _isReconnecting = MutableStateFlow(false)
     val isReconnecting: StateFlow<Boolean> = _isReconnecting.asStateFlow()
 
@@ -596,6 +653,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     fun attachSurface(surface: Surface?) {
+        if (isMultiviewControlOnly) return
         if (isMultiviewBorrowed) {
             // The returning tile may already own the decoder; only drop our own output.
             if (surface == null) borrowedSurface?.let(decoder::detachSurface) else decoder.attachSurface(surface)
@@ -616,27 +674,36 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     fun adoptMultiviewPose(pose: GimbalStickMapping) {
-        if (!isMultiviewBorrowed) return
+        if (!isMultiviewBorrowed || isMultiviewControlOnly) return
         gimbalStickMapping = pose
         syncGimbalPose()
     }
 
     fun receiveMultiview(frame: DumlFrame) {
-        if (!isMultiviewBorrowed) return
+        if (!isMultiviewBorrowed || !controlLeaseAllows()) return
         ingestDatalinkFrame(frame)
     }
 
     fun releaseMultiview() {
+        formatPin = null
         if (!isMultiviewBorrowed) return
-        endGimbalStick()
-        cancelProgrammedMove()
-        cancelTracking()
-        faceAFArmJob?.cancel()
-        faceAFArmJob = null
+        controlLease?.invalidate()
+        if (!isMultiviewControlOnly) {
+            endGimbalStick()
+            cancelProgrammedMove()
+            cancelTracking()
+            faceAFArmJob?.cancel()
+            faceAFArmJob = null
+        }
         inflight.clear()
         inflightPending.clear()
         failAllWaiters(kotlinx.coroutines.CancellationException("Multiview took the camera back"))
         datalink = null
+        if (isMultiviewControlOnly) {
+            connectedCamera = null
+            _phase.value = ConnectionPhase.IDLE
+            scope.cancel()
+        }
     }
 
     override fun disconnect() {
@@ -645,6 +712,9 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             return
         }
         ReliabilityReporting.setCameraSessionActive(false)
+        // Operator ended the session: an incident still open ends as userEnded.
+        FeedIncidentRuntime.endSession(SystemClock.elapsedRealtime() / 1000.0)
+        incidentSessionActive = false
         cancelSessionRecovery(clearHoldsMonitor = true)
         reconnectTarget = null
         _connectionTargetId.value = null
@@ -669,10 +739,15 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         ble.disconnect()
         decoder.reset()
         videoHistory.reset()
-        joiner.release()
+        releaseCameraPath()
         wifiLock.release()
         connectedCamera = null
         joinedSSID = null
+        connectionSetup = CameraConnectionSetup.CAMERA_WIFI
+        stationNetwork = null
+        restoreAccessPoint = false
+        stationHost = null
+        _setupProgress.value = null
         holdsMonitor = false
         isBrowsingMedia = false
         mediaPictureGeneration += 1
@@ -691,6 +766,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         gimbalFollowFamilyConfirmed = false
         shootingModePin = null
         whiteBalancePin = null
+        _aeLock.value = null
+        _awbLockKelvin.value = null
         focusPin = null
         isoLimitPin = null
         aperturePin = null
@@ -793,9 +870,16 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         }
 
         startKeepalive(joinedSSID)
+        if (connectionSetup.movesCamera) {
+            val ssid = runStation(camera)
+            startKeepalive(ssid)
+            return
+        }
         publishPhase(ConnectionPhase.READING_WIFI_CREDS)
+        val restored = restoreAccessPoint
+        if (restored) restoreCameraAccessPoint()
         val credsFromCache = wifiCache.load(camera.id) != null
-        val skipApSettle = joiner.isProcessBound() && credsFromCache
+        val skipApSettle = !restored && joiner.isProcessBound() && credsFromCache
         if (!skipApSettle) delay(200)
         ble.send(SwiftCore.command(SwiftCore.CMD_SESSION_5310, 0x8053))
         runCatching { waitFrame(0x53, 0x10, 2_000) }
@@ -903,35 +987,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         val existing = datalink
         val dl =
             existing?.takeIf { LiveViewEnablePolicy.shouldReuseDatalink(it.isClosed) }
-                ?: DatalinkDriver(
-                    joiner,
-                    camera.model.datalinkPort,
-                    camera.model.tcpPoke,
-                    camera.model.pairingToken,
-                    cadence,
-                    videoHistory,
-                    camera.model,
-                    debugVideoPacketAdmission = { debugVideoPacketAdmission?.invoke() ?: true },
-                ).also { created ->
-                    val inputOwner = decoder.claimInputOwner()
-                    created.onVideoEpochChanged = { epoch -> decoder.advanceInputEpoch(inputOwner, epoch) }
-                    created.onStatusFrame = { frame -> ingestDatalinkFrame(frame) }
-                    created.onAccessUnit = { au, epoch ->
-                        if (LiveViewEnablePolicy.shouldIngestLiveVideo(
-                                ingestArmed = true,
-                                browsingMedia = isBrowsingMedia,
-                                operatorOverlayHeld = operatorOverlayHeld,
-                            )
-                        ) {
-                            rawAccessUnits += 1
-                            decoder.decode(au, inputOwner, epoch)
-                        }
-                    }
-                    created.onReferenceDiscontinuity = { epoch ->
-                        decoder.noteReferenceDiscontinuity(inputOwner, epoch)
-                    }
-                    datalink = created
-                }
+                ?: makeDatalink(camera, stationHost.takeIf { connectionSetup.movesCamera })
         var attempt = 0
         while (true) {
             try {
@@ -963,7 +1019,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 Log.i(TAG, "session: handshake open timed out")
                 val miss =
                     DatalinkHandshakeException("camera never answered the datalink handshake")
-                if (LiveViewEnablePolicy.shouldKickAfterHandshakeTimeout(joiner.isProcessBound())) {
+                if (LiveViewEnablePolicy.shouldKickAfterHandshakeTimeout(cameraPath.isProcessBound())) {
                     throw miss
                 }
                 attempt += 1
@@ -976,7 +1032,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (LiveViewEnablePolicy.shouldKickAfterHandshakeTimeout(joiner.isProcessBound())) {
+                if (LiveViewEnablePolicy.shouldKickAfterHandshakeTimeout(cameraPath.isProcessBound())) {
                     throw e
                 }
                 attempt += 1
@@ -989,6 +1045,266 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             }
         }
     }
+
+    // ---- Wi-Fi and Hotspot setups (#406) --------------------------------------------------------
+
+    /**
+     * Setup for the next [connect] or [reconnect]. [network] carries the Wi-Fi or Hotspot
+     * credentials; [restoreAccessPoint] asks a camera Wi-Fi connect to bring back the access
+     * point of a camera a setup left in station role. A live session on another setup must
+     * be disconnected first.
+     */
+    fun useSetup(
+        setup: CameraConnectionSetup,
+        network: MultiviewNetworkStore.Network?,
+        restoreAccessPoint: Boolean,
+    ) {
+        if (setup != connectionSetup) stationHost = null
+        connectionSetup = setup
+        stationNetwork = network.takeIf { setup.movesCamera }
+        this.restoreAccessPoint = restoreAccessPoint && !setup.movesCamera
+        station.hotspot = setup == CameraConnectionSetup.PHONE_HOTSPOT
+    }
+
+    private fun releaseCameraPath() {
+        joiner.release()
+        station.release()
+    }
+
+    private fun cameraNetworkUsable(): Boolean =
+        if (connectionSetup.movesCamera) station.address() != null else joiner.hasUsableCameraNetwork()
+
+    private fun stationLog(line: String) = DiagnosticCenter.log("info", "session", "station", "station: $line")
+
+    /** BLE request on the session link; the reply is matched by opcode like every other wait. */
+    private suspend fun exchangeBle(kind: Int, extra: String? = null, timeoutMs: Long = 12_000): ByteArray {
+        stationSeq = (stationSeq + 1) and 0xFFFF
+        val bytes = SwiftCore.command(kind, stationSeq, extra)
+        require(bytes.size > 10) { "command not encoded" }
+        val key = ((bytes[9].toInt() and 0xFF) shl 8) or (bytes[10].toInt() and 0xFF)
+        pairingHold.remove(key)
+        ble.send(bytes)
+        return waitFrame(listOf(key), timeoutMs).payload
+    }
+
+    /**
+     * A camera a setup left in station role has its access point down. `07/48 00` is the
+     * reset Multiview sends on close. A missing or refused reply is not fatal: an access
+     * point already up still serves the normal join.
+     */
+    private suspend fun restoreCameraAccessPoint() {
+        val reply = runCatching { exchangeBle(SwiftCore.CMD_MULTICAM_STATION_MODE, "0") }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException && it !is TimeoutCancellationException) throw it }
+            .getOrNull()
+        val accepted = reply?.contentEquals(byteArrayOf(0)) == true || reply?.contentEquals(byteArrayOf(0, 0)) == true
+        DiagnosticCenter.log("info", "session", "wifi", "wifi: restore camera access point accepted=$accepted")
+        // Join only once `07/39` reports 00 00 (access point; 00 01 is station). iOS saw
+        // 0.2 to 2.4 s on a Pocket 4 Pro.
+        val started = SystemClock.elapsedRealtime()
+        for (poll in 0 until 15) {
+            val role = runCatching { exchangeBle(SwiftCore.CMD_MULTICAM_WIFI_WORK_MODE, timeoutMs = 4_000) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException && it !is TimeoutCancellationException) throw it }
+                .getOrNull()
+            DiagnosticCenter.log("info", "session", "wifi",
+                "wifi: camera role after restore ${role?.let(::hexBytes) ?: "no reply"} at " +
+                    "${"%.1f".format(Locale.US, (SystemClock.elapsedRealtime() - started) / 1000.0)} s")
+            if (role?.contentEquals(byteArrayOf(0, 0)) == true) break
+            delay(1_000)
+        }
+    }
+
+    /**
+     * Moves the camera onto the operator's Wi-Fi or this phone's hotspot with the captured
+     * Multiview sequence, then goes live on the address that proves this body. Returns the
+     * network name.
+     */
+    private suspend fun runStation(camera: FoundCamera): String {
+        val network = stationNetwork
+            ?: error("this setup's password is missing on this phone. Edit the setup and enter it again")
+        val hotspot = connectionSetup == CameraConnectionSetup.PHONE_HOTSPOT
+        publishPhase(ConnectionPhase.JOINING_WIFI)
+        station.hotspot = hotspot
+        try {
+            // Neither setup keeps the phone on a camera access point.
+            joiner.release()
+            joinedSSID = null
+            // Wi-Fi: this phone joins first. Hotspot: the phone hosts it and joins nothing.
+            if (!hotspot) {
+                _setupProgress.value = "Joining ${network.ssid} on this phone"
+                if (!station.join(network.ssid, network.password)) {
+                    error("this phone could not join the Wi-Fi. Check the password and that the network is in range")
+                }
+            }
+            if (camera.model.family == "nano") {
+                _setupProgress.value = "Waking camera Wi-Fi"
+                val wake = exchangeBle(SwiftCore.CMD_SESSION_5310)
+                if (!wake.contentEquals(byteArrayOf(1, 0, 0, 0))) {
+                    error("the Nano did not confirm its Wi-Fi wake. Keep it powered on and try again")
+                }
+                delay(1_000)
+            }
+            val identity = readStationIdentity()
+            val support = camera.multicamSupport()
+            val outcome = StationJoin(
+                ssid = network.ssid, password = network.password, hotspot = hotspot,
+                hasPreview = support.preview, missingRoleQueryE0 = support.missingRoleQueryE0,
+                // Bodies without a captured preview profile (Action, 360) take Multiview's
+                // bounded experimental path: no Pocket video-mode route, missing role getter allowed.
+                experimental = !camera.hasMultiviewPreview,
+                probeExistingStation = true,
+            ).run(
+                identity,
+                exchange = { kind, extra, timeoutMs -> exchangeBle(kind, extra, timeoutMs) },
+                send = { kind ->
+                    stationSeq = (stationSeq + 1) and 0xFFFF
+                    ble.send(SwiftCore.command(kind, stationSeq))
+                },
+                status = { _setupProgress.value = it },
+                hotspotReady = { station.address(true) != null },
+                verifyOnNetwork = { openStationDatalink(camera, identity, patienceMs = 0) },
+                log = ::stationLog,
+            )
+            if (outcome == StationJoin.Outcome.JOINED) {
+                _setupProgress.value = "Finding the camera on ${network.ssid}"
+                // A router hands the camera an address, then its services start: about 40 s
+                // after the join on a Pocket 4 Pro on a home /24 (iOS, 2026-09-24).
+                if (!openStationDatalink(camera, identity, patienceMs = STATION_FIND_MS)) {
+                    error(
+                        "the camera joined the Wi-Fi, but this phone cannot reach it there. The router is keeping " +
+                            "the two apart: on a Wi-Fi 7 router turn off MLO for this network (or add a camera " +
+                            "network without it), and turn off client isolation. The Hotspot setup avoids the router",
+                    )
+                }
+            }
+            return network.ssid
+        } finally {
+            _setupProgress.value = null
+        }
+    }
+
+    /**
+     * `07/07` over BLE: the only proof that a LAN address is this body. A Pocket just
+     * returned to its access point ignored it until one `53/10` wake (Multiview, 2026-09-23).
+     */
+    private suspend fun readStationIdentity(): ByteArray =
+        try {
+            exchangeBle(SwiftCore.CMD_GET_WIFI_SSID)
+        } catch (_: TimeoutCancellationException) {
+            stationLog("identity reply missing; sending Wi-Fi wake once")
+            try {
+                exchangeBle(SwiftCore.CMD_SESSION_5310, timeoutMs = 2_000)
+            } catch (_: TimeoutCancellationException) {
+            }
+            delay(600)
+            exchangeBle(SwiftCore.CMD_GET_WIFI_SSID)
+        }
+
+    /** Sweep the setup's subnet until the camera answers with [identity] or [patienceMs] runs out. */
+    private suspend fun openStationDatalink(camera: FoundCamera, identity: ByteArray, patienceMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + patienceMs
+        var sweep = 0
+        do {
+            sweep += 1
+            if (openStationDatalinkOnce(camera, identity, sweep)) return true
+            if (SystemClock.elapsedRealtime() >= deadline) break
+            delay(2_000)
+        } while (SystemClock.elapsedRealtime() < deadline)
+        return false
+    }
+
+    /**
+     * An address counts only when its datalink answers `07/07` with the identity read over
+     * BLE: other cameras can share the network. Then register and send the one enable.
+     */
+    private suspend fun openStationDatalinkOnce(camera: FoundCamera, identity: ByteArray, sweep: Int): Boolean {
+        val hotspot = connectionSetup == CameraConnectionSetup.PHONE_HOTSPOT
+        if (station.address() == null) {
+            stationLog("sweep $sweep no ${if (hotspot) "hotspot" else "Wi-Fi"} address")
+            return false
+        }
+        val known = listOfNotNull(stationHost)
+        val started = SystemClock.elapsedRealtime()
+        val found = try {
+            MultiviewDiscovery(station).candidates(emptySet())
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            stationLog("sweep $sweep cannot scan this subnet (${error.message})")
+            emptyList()
+        }
+        // Whether the phone is on the setup's network, never its name: diagnostics are shared.
+        stationLog("sweep $sweep answering=${found.size} known=${known.size} in " +
+            "${"%.1f".format(Locale.US, (SystemClock.elapsedRealtime() - started) / 1000.0)} s")
+        for (host in known + found.filterNot { it in known }) {
+            coroutineContext.ensureActive()
+            disposeDatalink()
+            val dl = makeDatalink(camera, host)
+            try {
+                withTimeout(LiveViewEnablePolicy.handshakeOpenTimeoutMs()) {
+                    interruptibleDatalinkOpen { dl.open(identityOnly = true) }
+                }
+                pairingHold.remove(IDENTITY_KEY)
+                dl.sendCommand(SwiftCore.CMD_GET_WIFI_SSID)
+                val reply = waitFrame(listOf(IDENTITY_KEY), 8_000)
+                if (!reply.payload.contentEquals(identity) || datalink !== dl) {
+                    stationLog("an answering device is another camera")
+                    continue
+                }
+            } catch (_: TimeoutCancellationException) {
+                stationLog("an answering device did not open the datalink")
+                continue
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                stationLog("an answering device did not open the datalink")
+                continue
+            }
+            stationLog("camera identity verified on the network")
+            stationHost = host
+            withContext(Dispatchers.IO) { dl.completeRegistration() }
+            // Subscribe is fire-and-forget; an enable in the same burst is ignored.
+            delay(STATION_SUBSCRIBE_SETTLE_MS)
+            publishPhase(ConnectionPhase.LIVE)
+            beginFeedIncidentSession()
+            withContext(Dispatchers.IO) { sendCapturedLiveView("first picture") }
+            return true
+        }
+        disposeDatalink()
+        return false
+    }
+
+    /** New driver on the camera access point, or the verified station address. Becomes [datalink]. */
+    private fun makeDatalink(camera: FoundCamera, host: String?): DatalinkDriver =
+        DatalinkDriver(
+            cameraPath,
+            camera.model.datalinkPort,
+            camera.model.tcpPoke,
+            camera.model.pairingToken,
+            cadence,
+            videoHistory,
+            camera.model,
+            debugVideoPacketAdmission = { debugVideoPacketAdmission?.invoke() ?: true },
+            host = host ?: DatalinkDriver.CAMERA_HOST,
+        ).also { created ->
+            val inputOwner = decoder.claimInputOwner()
+            created.onVideoEpochChanged = { epoch -> decoder.advanceInputEpoch(inputOwner, epoch) }
+            created.onStatusFrame = { frame -> ingestDatalinkFrame(frame) }
+            created.onAccessUnit = { au, epoch ->
+                if (LiveViewEnablePolicy.shouldIngestLiveVideo(
+                        ingestArmed = true,
+                        browsingMedia = isBrowsingMedia,
+                        operatorOverlayHeld = operatorOverlayHeld,
+                    )
+                ) {
+                    rawAccessUnits += 1
+                    decoder.decode(au, inputOwner, epoch)
+                }
+            }
+            created.onReferenceDiscontinuity = { epoch ->
+                decoder.noteReferenceDiscontinuity(inputOwner, epoch)
+            }
+            datalink = created
+        }
 
     /** Stay on LIVE while recovering so the monitor (last frame) is not unmounted. */
     private fun publishPhase(next: ConnectionPhase) {
@@ -1081,7 +1397,12 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                             withContext(Dispatchers.IO) {
                                 DiagnosticCenter.log("info", "feed", "cadence",
                                     "${cadence.format(lineWindow)} incomplete=${datalink?.droppedIncomplete ?: 0} " +
-                                        "errors=${decoder.decoderErrors.get()} phase=${_phase.value.name.lowercase()}")
+                                        "errors=${decoder.decoderErrors.get()} phase=${_phase.value.name.lowercase()} " +
+                                        "irap=${datalink?.admissionIrapSeen ?: 0} ps=${datalink?.admissionParameterSetsSeen ?: 0} " +
+                                        "gate=${if (datalink?.admissionAwaitingRandomAccess == true) "await" else "open"} " +
+                                        "gateDrops=${datalink?.admissionGateDrops ?: 0} " +
+                                        "dec=cfg:${decoder.isConfigured},hold:${decoder.awaitingIdr}," +
+                                        "surface:${decoder.isPresentationReady}")
                             }
                         }
                         recoverLiveViewIfNeeded()
@@ -1143,7 +1464,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 sawPicture = hasStableLivePicture,
                 statusFresh = statusFresh,
                 sinceEnableMs = if (lastIdrRequest == 0L) null else now - lastIdrRequest,
-                pathReady = joiner.isProcessBound(),
+                pathReady = cameraPath.isProcessBound(),
             )
         }
 
@@ -1153,7 +1474,10 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             return SystemClock.elapsedRealtime() - at >= LiveViewEnablePolicy.REBUILD_COOLDOWN_MS
         }
 
+    /** iOS parity: one incident session per operator connect; recovery reconnects keep it. */
     private fun beginFeedIncidentSession() {
+        if (incidentSessionActive) return
+        incidentSessionActive = true
         FeedIncidentRuntime.beginSession(
             FeedIncidentSessionContext(
                 sessionId = feedSessionId,
@@ -1231,6 +1555,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                         receivedIrap = decoder.hasDecodableReferences,
                         awaitingIrap = decoder.awaitingIdr,
                         hasDecodableReferences = decoder.hasDecodableReferences,
+                        lastIrapAge = ageSec(decoder.lastIrapAt),
                         lastSuccessfulOutputAge = ageSec(decoder.lastDecoderOutputAt),
                     ),
                 lifecycle =
@@ -1295,7 +1620,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             logRecoverSkip("foreground")
             return
         }
-        if (!joiner.isProcessBound()) {
+        if (!cameraPath.isProcessBound()) {
             logRecoverSkip("unbound")
             return
         }
@@ -1433,9 +1758,10 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             LiveViewEnablePolicy.FirstPictureStep.RESEND_ENABLE -> {
                 // Do not route through sendRecoverEnable — inPlayback / decoder-ready
                 // holds skipped the only PLI and sat on WAITING FOR LIVE VIEW.
-                sendCapturedLiveView(
-                    if (liveViewEnableSends == 0) "first picture" else "first-picture resend",
-                )
+                val resend = liveViewEnableSends > 0
+                if (sendCapturedLiveView(if (resend) "first-picture resend" else "first picture") && resend) {
+                    logRecovery(RecoveryAction.ENABLE, RecoveryEffect.SENT, RecoveryReason.FIRST_PICTURE)
+                }
             }
             LiveViewEnablePolicy.FirstPictureStep.REBUILD_UDP -> {
                 if (currentRepairOwnsPicture) return
@@ -1485,7 +1811,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 lastBleNotifyAt = lastBleNotifyAt,
                 lastRebuildAt = datalink?.lastRebuildAt,
                 lastEnableAt = lastIdrRequest,
-                pathReady = joiner.isProcessBound(),
+                pathReady = cameraPath.isProcessBound(),
                 hasFormat = decoder.hasFormat,
                 decoderErrors = decoderErrors,
                 live = _phase.value == ConnectionPhase.LIVE,
@@ -1501,6 +1827,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 lastPresentedAt = decoder.lastPresentedAt,
                 decoderOutputExpected = decoder.decoderOutputExpected,
                 referenceRecoveryNeeded = decoder.referenceRecoveryNeeded,
+                lastIrapAt = decoder.lastIrapAt,
                 repairReady = decoder.isPresentationReady,
             )
         if (coreWatchdog == 0L && SwiftCore.isAvailable) {
@@ -1540,6 +1867,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                     age(decoder.lastDecoderOutputAt)?.let { append(",\"lastDecoderOutputAge\":$it") }
                     append(",\"decoderOutputExpected\":${decoder.decoderOutputExpected}")
                     append(",\"referenceRecoveryNeeded\":${snap.referenceRecoveryNeeded}")
+                    age(decoder.lastIrapAt)?.let { append(",\"secondsSinceLastIrap\":$it") }
                     append(",\"repairReady\":${decoder.isPresentationReady}")
                     append("}")
                 }
@@ -1752,7 +2080,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             logRecovery(RecoveryAction.ENABLE, RecoveryEffect.BLOCKED, RecoveryReason.PLAYBACK)
             return false
         }
-        val pathReady = joiner.isProcessBound()
+        val pathReady = cameraPath.isProcessBound()
         val decoderReady = decoder.isPresentationReady
         if (!LiveViewEnablePolicy.shouldSendRecoverEnable(pathReady, decoderReady)) {
             Log.i(TAG, "feed: hold enable path=${if (pathReady) 1 else 0} decoder=${if (decoderReady) 1 else 0} reason=$reason")
@@ -1795,13 +2123,14 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         }
         var sent = false
         val readyDeadline = startedAt + LiveViewEnablePolicy.ENDPOINT_PICTURE_GRACE_MS
-        while (SystemClock.elapsedRealtime() < readyDeadline) {
-            if (!ownsPicture()) return
-            if (decoder.isPresentationReady &&
-                joiner.isProcessBound() &&
+        fun enableReady() =
+            decoder.isPresentationReady &&
+                cameraPath.isProcessBound() &&
                 !isBrowsingMedia &&
                 !_status.value.inPlayback
-            ) {
+        while (SystemClock.elapsedRealtime() < readyDeadline) {
+            if (!ownsPicture()) return
+            if (enableReady()) {
                 sent = sendRecoverEnable(force = true, reason = "watchdog decoder")
                 if (sent) break
             }
@@ -1811,11 +2140,38 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             logRecovery(RecoveryAction.DECODER, RecoveryEffect.BLOCKED, RecoveryReason.NOT_READY)
             return
         }
-        val restored =
-            kotlinx.coroutines.withTimeoutOrNull(LiveViewEnablePolicy.ENDPOINT_PICTURE_GRACE_MS) {
-                while (ownsPicture() && !hasRecoveryPicture(startedAt)) delay(100)
-                true
-            } ?: false
+        // Resend the keyframe request until an IRAP newer than it lands;
+        // unanswered twice, rebuild the endpoint (core decoderRepairStep).
+        var keyframeRequests = 1
+        var restored = false
+        repair@ while (ownsPicture()) {
+            if (hasRecoveryPicture(startedAt)) {
+                restored = true
+                break
+            }
+            val now = SystemClock.elapsedRealtime()
+            when (
+                LiveViewEnablePolicy.decoderRepairStep(
+                    sinceRepairStartMs = now - startedAt,
+                    sinceEnableMs = now - lastIdrRequest,
+                    sinceIrapMs = decoder.lastIrapAt?.let { now - it },
+                    keyframeRequests = keyframeRequests,
+                )
+            ) {
+                LiveViewEnablePolicy.DecoderRepairStep.WAIT -> Unit
+                LiveViewEnablePolicy.DecoderRepairStep.RESEND_KEYFRAME ->
+                    if (enableReady() && sendRecoverEnable(force = true, reason = "watchdog keyframe resend")) {
+                        keyframeRequests += 1
+                    }
+                LiveViewEnablePolicy.DecoderRepairStep.REBUILD_ENDPOINT -> {
+                    logRecovery(RecoveryAction.ENDPOINT, RecoveryEffect.REQUESTED, RecoveryReason.KEYFRAME_UNANSWERED)
+                    rebuildDatalinkKeepingPicture("keyframe unanswered")
+                    return
+                }
+                LiveViewEnablePolicy.DecoderRepairStep.DEADLINE -> break@repair
+            }
+            delay(100)
+        }
         if (!ownsPicture()) return
         if (restored) {
             logRecovery(RecoveryAction.DECODER, RecoveryEffect.FRESH_PICTURE, RecoveryReason.OUTPUT_RESUMED)
@@ -1835,6 +2191,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         }
         FeedIncidentRuntime.noteExhausted(SystemClock.elapsedRealtime() / 1000.0)
         logRecovery(RecoveryAction.DECODER, RecoveryEffect.BLOCKED, RecoveryReason.PICTURE_DEADLINE)
+        logRecovery(RecoveryAction.REJOIN, RecoveryEffect.REQUESTED, RecoveryReason.PICTURE_DEADLINE)
         rejoinDatalinkKeepingLive()
     }
 
@@ -1874,7 +2231,9 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             recoverSession = {
                 DiagnosticCenter.log("notice", "recovery", "endpoint",
                     "feed: endpoint repair did not restore picture ($reason)")
-                beginSessionRecovery("camera endpoint did not recover", SessionRecoveryTrigger.DATALINK_LOST)
+                if (!holdSessionRecoveryForLiveVideo()) {
+                    beginSessionRecovery("camera endpoint did not recover", SessionRecoveryTrigger.DATALINK_LOST)
+                }
             },
         ) {
             // Reject every queued pre-negotiation image, including one decoded
@@ -1963,10 +2322,10 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
      * packets still arrive but the picture is frozen — that is the resume canvas.
      */
     private fun recoverAfterForeground() {
-        if (!joiner.hasUsableCameraNetwork()) {
+        if (!cameraNetworkUsable()) {
             DiagnosticCenter.log("notice", "recovery", "foreground-network",
                 "live: foreground camera network unavailable — reconnect camera")
-            joiner.release()
+            releaseCameraPath()
             beginSessionRecovery("camera Wi-Fi changed while away", SessionRecoveryTrigger.SOFTAP_LOST)
             return
         }
@@ -1979,8 +2338,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             delay(LiveViewEnablePolicy.STALL_MS)
             if (!ownsLivePicture(owner) || datalink !== link) return@startFeedRecovery
             if (hasRecoveryPicture(returnedAt)) return@startFeedRecovery
-            if (!joiner.hasUsableCameraNetwork()) {
-                joiner.release()
+            if (!cameraNetworkUsable()) {
+                releaseCameraPath()
                 beginSessionRecovery("camera Wi-Fi changed while away", SessionRecoveryTrigger.SOFTAP_LOST)
                 return@startFeedRecovery
             }
@@ -1988,9 +2347,31 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                 "live: foreground picture did not return — reconnect camera")
             // A fresh session owns the next enable. Do not add a foreground PLI
             // alongside the watchdog while the old socket is still delivering.
-            joiner.release()
+            releaseCameraPath()
             beginSessionRecovery("picture did not return after app switch", SessionRecoveryTrigger.DATALINK_LOST)
         }
+    }
+
+    /**
+     * Core `nextSessionHoldCycles`: a repair picture deadline with video still
+     * arriving is a keyframe/decoder stall. Keep BLE; the watchdog owns it again.
+     */
+    private fun holdSessionRecoveryForLiveVideo(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val videoAge = datalink?.lastVideoPacketAt?.let { now - it }
+        val presented = decoder.lastPresentedAt
+        val held = lastSessionHoldAt
+        val pictureSinceLastHold = held != null && presented != null && presented > held
+        sessionHoldCycles = LiveViewEnablePolicy.nextSessionHoldCycles(videoAge, sessionHoldCycles, pictureSinceLastHold)
+        lastSessionHoldAt = now
+        // Bounded: the maxHeldRepairCycles-th deadline in one episode releases to SessionRecovery.
+        if (sessionHoldCycles == 0) return false
+        DiagnosticCenter.log("notice", "recovery", "session",
+            "feed: keep BLE, video still arriving; watchdog owns the stall cycle=$sessionHoldCycles")
+        logRecovery(RecoveryAction.SESSION, RecoveryEffect.BLOCKED, RecoveryReason.VIDEO_LIVE)
+        if (coreWatchdog != 0L && SwiftCore.isAvailable) SwiftCore.feedWatchdogReset(coreWatchdog)
+        feedWatchdog.reset()
+        return true
     }
 
     internal fun hasRecoveryPicture(startedAt: Long): Boolean =
@@ -2011,8 +2392,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         idrHoldEnableCount = 0
         firstPictureSettled = false
         focusTrackPending = true
-        if (!joiner.hasUsableCameraNetwork()) {
-            joiner.release()
+        if (!cameraNetworkUsable()) {
+            releaseCameraPath()
             beginSessionRecovery("camera Wi-Fi unavailable during rejoin", SessionRecoveryTrigger.SOFTAP_LOST)
             return
         }
@@ -2033,6 +2414,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException && e !is TimeoutCancellationException) throw e
             if (negotiationCompleted && !ownsLivePicture(owner)) return
+            if (e is TimeoutCancellationException && holdSessionRecoveryForLiveVideo()) return
             DiagnosticCenter.log("notice", "recovery", "session", "feed: full rejoin failed (${e.message})")
             disposeDatalink()
             // A null datalink under LIVE has no repair owner — bounded session
@@ -2167,7 +2549,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             videoHistory.reset()
         }
         if (!preserveSoftAP) {
-            joiner.release()
+            releaseCameraPath()
         }
         videoPackets = 0
         accessUnits = 0
@@ -2186,7 +2568,6 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         needsForegroundRecover = false
         feedWatchdog.reset()
         if (coreWatchdog != 0L && SwiftCore.isAvailable) SwiftCore.feedWatchdogReset(coreWatchdog)
-        FeedIncidentRuntime.endSession(SystemClock.elapsedRealtime() / 1000.0)
     }
 
     fun retrySessionRecovery() {
@@ -2222,7 +2603,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         feedRecoveryJob?.cancel()
         feedRecoveryJob = null
         connectJob?.cancel()
-        stopLivePipeline(preserveDecoder = true, preserveSoftAP = joiner.isProcessBound())
+        stopLivePipeline(preserveDecoder = true, preserveSoftAP = cameraPath.isProcessBound())
         ble.disconnect()
         val now = SystemClock.elapsedRealtime()
         if (dropStorm.noteDrop(now)) {
@@ -2280,7 +2661,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             }
         }
         if (!withinAutomaticRecoveryBudget { runAttempts() }) {
-            stopLivePipeline(preserveDecoder = true, preserveSoftAP = joiner.hasUsableCameraNetwork())
+            stopLivePipeline(preserveDecoder = true, preserveSoftAP = cameraNetworkUsable())
             ble.disconnect()
             _recoveryState.value = SessionRecoveryUi.WaitingForOperator(maxOf(1, failures + 1))
             DiagnosticCenter.log("notice", "recovery", "budget",
@@ -2319,7 +2700,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             false
         }.also { recovered ->
             if (!recovered) {
-                stopLivePipeline(preserveDecoder = true, preserveSoftAP = joiner.hasUsableCameraNetwork())
+                stopLivePipeline(preserveDecoder = true, preserveSoftAP = cameraNetworkUsable())
                 ble.disconnect()
             }
         }
@@ -2370,11 +2751,20 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             formatPin = null
         }
         next = CamFov.absorb(next)
-        next = absorbStaleFormat(next, reported.resolutionCode >= 0 && reported.fpsIndex >= 0)
-        next = absorbStaleColor(next, reported)
+        // Reconcile the explicit Manual pin before accepting an Auto report.
         next = absorbStaleExpo(next, reported)
+        reconcileAeLock(next)
+        if (next.expoMode == CameraCommands.EXPO_AUTO && formatPin?.shutterAngle != null) {
+            formatPin?.shutterAngle = null
+            clearExpoPin(shutter = true)
+        }
+        val (formatStatus, angleRematch) =
+            absorbStaleFormat(next, reported.resolutionCode >= 0 && reported.fpsIndex >= 0)
+        next = formatStatus
+        next = absorbStaleColor(next, reported)
         next = absorbStaleWhiteBalance(next, reported.wbMode >= 0 &&
             (reported.wbMode != CameraCommands.WB_CUSTOM || reported.wbKelvin >= 2000))
+        reconcileAwbLock(next)
         next = absorbStaleFocus(next, reported.focusMode >= 0, reported.focusTrack >= 0)
         next = absorbStaleIsoLimit(next, reported.isoLimit >= 0)
         aperturePin?.let { pin ->
@@ -2383,6 +2773,30 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             )
             aperturePin = remaining
             if (held != null) next = next.copy(apertureStrategy = held)
+        }
+        if (frame.cmdSet == 0x02 && frame.cmdId == 0xA0) {
+            val (updated, blob) = StatusExtras.applyAudioDsp(frame.payload, next)
+            next = updated
+            if (blob != null) {
+                audioDspBlob = blob
+                next = next.applyingAudioBlob(blob)
+            }
+        }
+        audioPin?.let { pin ->
+            val (held, nextPin) =
+                pin.absorb(
+                    next,
+                    _status.value,
+                    SystemClock.elapsedRealtime(),
+                    reportedValues = reported,
+                )
+            next = held
+            audioPin = nextPin
+        }
+        if (isMultiviewControlOnly) {
+            if (next != prev) { telemetryStatus = next; _status.value = next }
+            rematchShutterAngle(angleRematch)
+            return
         }
         if (next.selfieFlip != prev.selfieFlip) {
             gimbalStickMapping = gimbalStickMapping.copy(selfieFlip = next.selfieFlip == true)
@@ -2403,14 +2817,12 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             gimbalStickMapping = gimbalStickMapping.applyAttitude(frame.payload)
             levelReading.ingest(frame.payload, SystemClock.elapsedRealtimeNanos() / 1e9)
             judgeWorldLevelSnap()
-            if (frame.payload.size >= 22) {
+            if (CameraCommands.isAttitude(frame.payload)) {
                 val now = SystemClock.elapsedRealtime()
                 val previousAt = lastValidGimbalAttitudeAt
-                val rawPitch = ((frame.payload[0].toInt() and 0xFF) or
-                    ((frame.payload[1].toInt() and 0xFF) shl 8)).toShort().toInt()
                 lastNativeGimbalPose = GimbalWaypoint.from(
                     CameraCommands.yawTenthDeg(frame.payload), CameraCommands.pitchTenthDeg(frame.payload),
-                    _zoomReadout.value, rawPitch)
+                    _zoomReadout.value, CameraCommands.nativePitchTenthDeg(frame.payload))
                 lastValidGimbalAttitudeAt = now
                 val pose = liveGimbalWaypoint
                 pose?.let { gimbalOverlayMotion.observe(it, now / 1000.0) }
@@ -2424,6 +2836,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                     captureStableSince = now
                     captureStablePose = pose
                 }
+                restoreGimbalPrep(gimbalPrep.restore(_gimbalMoveRunning.value, now / 1000.0))
             }
             syncGimbalPose()
             tickGimbalLimit()
@@ -2440,25 +2853,6 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             applyTrackingPoll(frame.payload)
         }
         if (lastTapFocusAt != null) refreshTrackingHud()
-        if (frame.cmdSet == 0x02 && frame.cmdId == 0xA0) {
-            val (updated, blob) = StatusExtras.applyAudioDsp(frame.payload, next)
-            next = updated
-            if (blob != null) {
-                audioDspBlob = blob
-                next = next.applyingAudioBlob(blob)
-            }
-        }
-        audioPin?.let { pin ->
-            val (held, nextPin) =
-                pin.absorb(
-                    next,
-                    _status.value,
-                    SystemClock.elapsedRealtime(),
-                    reportedValues = reported,
-                )
-            next = held
-            audioPin = nextPin
-        }
         if (wasRecording && !next.isRecording) {
             cancelProgrammedMove()
         }
@@ -2490,6 +2884,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             _status.value = next
             publishFaceDetectWanted()
         }
+        rematchShutterAngle(angleRematch)
         confirmZoomColorHopIfReady()
     }
 
@@ -2630,6 +3025,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         get() = feedRecoveryJob != null
 
     fun setShootingMode(raw: Int) {
+        // Return the old mode to Auto before leaving it; the camera keeps Manual per mode.
+        unlockAutoExposure()
         val previous = _status.value
         val revision = ++shootingModeRevision
         shootingModePin =
@@ -2909,13 +3306,24 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             )
         }
 
+    private val feedDoubleTap = FeedDoubleTapTrack()
+
+    /**
+     * Feed tap: inside the AF-C face box → ActiveTrack with that rect. A second
+     * tap on the same spot → ActiveTrack there (Mimo / on-camera). Else tap-focus.
+     */
     fun handleFeedTap(x: Float, y: Float) {
         val nx = x.coerceIn(0f, 1f).toDouble()
         val ny = y.coerceIn(0f, 1f).toDouble()
         val hud = _trackingHud.value
         val box = FaceTrackTap.boxIfTapped(hud.overlay, nx, ny, hud.dimmedFaces)
         if (box != null) {
+            feedDoubleTap.reset()
             startTracking(box)
+            return
+        }
+        feedDoubleTap.register(nx, ny, SystemClock.elapsedRealtime() / 1000.0)?.let {
+            startTracking(it)
             return
         }
         when (LiveFeedTapPolicy.action(supportsTapFocus, tappedFace = false)) {
@@ -2940,6 +3348,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         lastSubjectPushAt = null
         searchBox = box
         subjectBox = null
+        trackingRequest = box
+        trackingRequestAt = SystemClock.elapsedRealtime()
         isTracking = false
         trackingSawLock = false
         faceBox = null
@@ -3186,6 +3596,11 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         return mediaPictureGeneration
     }
 
+    /** Suspend the live-only Selfie Flip GET while playback/listing owns the camera. */
+    fun setMediaTransportBrowsing(browsing: Boolean) {
+        datalink?.setMediaBrowsing(browsing)
+    }
+
     private fun ownsLivePicture(owner: Long): Boolean =
         com.opencapture.openpocketcine.media.MediaLiveResume.isCurrentPictureOwner(
             owner, mediaPictureGeneration, isBrowsingMedia)
@@ -3332,6 +3747,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     fun setShutterDenom(denom: Int) {
+        formatPin?.shutterAngle = null
         if (_status.value.expoMode != CameraCommands.EXPO_MANUAL) {
             val previousExpo = _status.value.expoMode
             pinExpo(expoMode = CameraCommands.EXPO_MANUAL)
@@ -3365,8 +3781,53 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         )
     }
 
+    /** Only explicit angle choices write the saved intent; delayed telemetry never does. */
+    fun setShutterAngle(degrees: Double) {
+        val dl = datalink
+        if (!controlLeaseAllows() || dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
+            _controlNote.value = "not live"
+            return
+        }
+        if (CameraCommands.isPhotoMode(_status.value.shootingMode)) return
+        if (formatPin?.let { SystemClock.elapsedRealtime() >= it.activeDeadline } == true) formatPin = null
+        val angle = ShutterAngle.nearestDegrees(degrees)
+        OperatorPrefs.setShutterAngleDegrees(appContext, angle)
+        val current = _status.value
+        val denom = ShutterAngle.denom(angle, current.fps, current.availableShutterDenoms)
+        if (formatPin != null && current.expoMode == CameraCommands.EXPO_MANUAL &&
+            !CameraCommands.isPhotoMode(current.shootingMode)) {
+            formatPin?.shutterAngle = angle
+            pinExpo(shutterDenom = denom)
+            _status.value = current.copy(shutterDenom = denom)
+            return
+        }
+        setShutterDenom(denom)
+    }
+
+    private fun rematchShutterAngle(degrees: Double?) {
+        if (degrees == null || !OperatorPrefs.shutterUsesAngle(appContext)) return
+        val current = _status.value
+        val dl = datalink
+        if (current.expoMode != CameraCommands.EXPO_MANUAL || CameraCommands.isPhotoMode(current.shootingMode) ||
+            !controlLeaseAllows() || dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) return
+        val note = _controlNote.value
+        setShutterDenom(ShutterAngle.denom(degrees, current.fps, current.availableShutterDenoms))
+        if (_controlNote.value == null) _controlNote.value = note
+    }
+
     fun setExpoMode(mode: Int) {
         val extra = CameraCommands.expoWireExtra(mode) ?: return
+        // Manual from AE-L keeps the pinned values; the camera is already Manual.
+        if (mode == CameraCommands.EXPO_MANUAL && _aeLock.value != null &&
+            _status.value.expoMode == CameraCommands.EXPO_MANUAL) {
+            _aeLock.value = null
+            return
+        }
+        _aeLock.value = null
+        if (mode != CameraCommands.EXPO_MANUAL) {
+            formatPin?.shutterAngle = null
+            clearExpoPin(shutter = true)
+        }
         val previous = _status.value.expoMode
         pinExpo(expoMode = mode)
         _status.value = _status.value.copy(expoMode = mode)
@@ -3383,7 +3844,78 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         )
     }
 
+    private fun exposureLockDecision(kind: String, json: String): String? =
+        if (SwiftCore.isAvailable) SwiftCore.exposureLockDecision(kind, json)?.takeIf { it.isNotEmpty() } else null
+
+    val canLockAutoExposure: Boolean
+        get() = _aeLock.value == null && exposureLockDecision("aeLock", _status.value.toJson()) != null
+
+    /** Pins the applied Auto exposure as Manual (no captured native AE lock). iOS `lockAutoExposure`. */
+    fun lockAutoExposure(): Boolean {
+        val dl = datalink
+        if (_aeLock.value != null || !controlLeaseAllows() || dl == null ||
+            !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) return false
+        val lock = exposureLockDecision("aeLock", _status.value.toJson())
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            ?.let { AutoExposureLock(it.getInt("isoIndex"), it.getInt("shutterDenom"), it.getInt("shootingMode")) }
+            ?: return false
+        setExpoMode(CameraCommands.EXPO_MANUAL)
+        setIsoIndex(lock.isoIndex)
+        setShutterDenom(lock.shutterDenom)
+        aeLockChecked = null
+        _aeLock.value = lock
+        Log.i(TAG, "ae-lock: ISO index ${lock.isoIndex} 1/${lock.shutterDenom}")
+        return true
+    }
+
+    fun unlockAutoExposure() {
+        if (_aeLock.value == null) return
+        setExpoMode(CameraCommands.EXPO_AUTO)
+    }
+
+    /** Only (expo mode, shooting mode) decide `holds`, so ask the core when that pair moves. */
+    private fun reconcileAeLock(status: CameraStatus) {
+        val lock = _aeLock.value ?: return
+        val key = status.expoMode to status.shootingMode
+        if (key == aeLockChecked) return
+        aeLockChecked = key
+        val request = JSONObject(status.toJson()).put("lockShootingMode", lock.shootingMode)
+        if (exposureLockDecision("aeLockHolds", request.toString()) == "false") _aeLock.value = null
+    }
+
+    /** `(kelvin, tint)` for AWB lock, or null unless Auto reports a live Kelvin. */
+    fun autoWhiteBalanceLock(status: CameraStatus = _status.value): Pair<Int, Int>? =
+        exposureLockDecision("awbLock", status.toJson())
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            ?.let { it.getInt("kelvin") to it.getInt("tint") }
+
+    /**
+     * Pins the live Auto Kelvin as Custom (no captured native AWB lock). iOS
+     * `lockAutoWhiteBalance`: the optimistic Custom lands first, so the lock never sees a stale Auto.
+     */
+    fun lockAutoWhiteBalance() {
+        if (_awbLockKelvin.value != null) return
+        val (kelvin, tint) = autoWhiteBalanceLock() ?: return
+        setWhiteBalance(kelvin, tint)
+        val now = _status.value
+        if (now.wbMode == CameraCommands.WB_CUSTOM && now.wbKelvin == kelvin) {
+            awbLockChecked = null
+            _awbLockKelvin.value = kelvin
+        }
+    }
+
+    /** Only the reported (WB mode, Kelvin) decide `holds`, so ask the core when that pair moves. */
+    private fun reconcileAwbLock(status: CameraStatus) {
+        val kelvin = _awbLockKelvin.value ?: return
+        val key = status.wbMode to status.wbKelvin
+        if (key == awbLockChecked) return
+        awbLockChecked = key
+        val request = JSONObject(status.toJson()).put("lockKelvin", kelvin)
+        if (exposureLockDecision("awbLockHolds", request.toString()) == "false") _awbLockKelvin.value = null
+    }
+
     fun setWhiteBalanceAuto(tint: Int? = null) {
+        _awbLockKelvin.value = null
         val previous = _status.value
         val next = (tint ?: _status.value.wbTint).coerceIn(-100, 100)
         whiteBalancePin =
@@ -3414,6 +3946,13 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     fun setWhiteBalance(kelvin: Int, tint: Int) {
         val previous = _status.value
         val (k, t) = CameraCommands.clampWhiteBalanceCustom(kelvin, tint)
+        // Custom from AWB Lock keeps the locked value; the camera is already there.
+        if (_awbLockKelvin.value != null && previous.wbMode == CameraCommands.WB_CUSTOM &&
+            previous.wbKelvin == k && previous.wbTint == t) {
+            _awbLockKelvin.value = null
+            return
+        }
+        _awbLockKelvin.value = null
         whiteBalancePin =
             WhiteBalancePin(
                 wbMode = CameraCommands.WB_CUSTOM,
@@ -3559,27 +4098,28 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
             )
         ) return false
         val modeAtSet = previous.shootingMode
+        val angle = if (ShutterAngle.rematchesFormat(
+                usesAngle = OperatorPrefs.shutterUsesAngle(appContext),
+                manual = previous.expoMode == CameraCommands.EXPO_MANUAL,
+                isPhoto = CameraCommands.isPhotoMode(previous.shootingMode),
+                previousFps = previous.fps, nextFps = format.frameRate.fps,
+                alreadyPending = formatPin?.shutterAngle != null,
+            )) formatPin?.shutterAngle ?: OperatorPrefs.shutterAngleDegrees(appContext) else null
+        val shutter = angle?.let { ShutterAngle.denom(it, format.frameRate.fps, previous.availableShutterDenoms) }
         val pin =
             FormatPin(
                 expected = format,
                 deadlineElapsedRealtime = SystemClock.elapsedRealtime() + 2_000L,
+                shutterAngle = angle,
             )
         formatPin = pin
+        if (shutter != null) pinExpo(shutterDenom = shutter)
         _status.value =
             previous.copy(
                 resolutionCode = format.resolution.rawValue,
                 fpsIndex = format.frameRate.rawValue,
                 fps = format.frameRate.fps,
-            )
-        val rematch =
-            CaptureLists.rematchShutterDenomAfterFps(
-                usesAngle = OperatorPrefs.shutterUsesAngle(appContext),
-                degrees = OperatorPrefs.shutterAngleDegrees(appContext),
-                previousFps = previous.fps,
-                nextFps = format.frameRate.fps,
-                expoMode = previous.expoMode,
-                currentDenom = previous.shutterDenom,
-                available = previous.availableShutterDenoms,
+                shutterDenom = shutter ?: previous.shutterDenom,
             )
         fireKind(
             SwiftCore.CMD_SET_VIDEO_FORMAT,
@@ -3597,22 +4137,15 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
                             resolutionCode = previous.resolutionCode,
                             fpsIndex = previous.fpsIndex,
                             fps = previous.fps,
+                            shutterDenom = if (pin.shutterAngle != null) previous.shutterDenom else live.shutterDenom,
                         )
+                    if (pin.shutterAngle != null) clearExpoPin(shutter = true)
                 }
                 formatPin = null
             },
         )
-        // [fireKind] clears the note on its way out and only writes one when the
-        // SET could not go. Hold that failure aside: the shutter rematch below
-        // sends again and would clear it along with anything written here.
-        val formatSendNote = _controlNote.value
-        if (rematch != null) setShutterDenom(rematch)
-        // Settle the note once both sends are done. A failure from either send
-        // outranks the ceiling note, which is only worth showing when the format
-        // change actually went.
-        if (formatSendNote != null) {
-            _controlNote.value = formatSendNote
-        } else if (_controlNote.value == null) {
+        // Only actual format telemetry releases the shutter SET on the existing mailbox.
+        if (_controlNote.value == null) {
             _controlNote.value =
                 CamFov.ceilingNote(
                     format.resolution.sizeTitle,
@@ -3631,16 +4164,23 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         return setVideoFormat(format)
     }
 
-    private fun absorbStaleFormat(incoming: CameraStatus, formatReported: Boolean): CameraStatus {
+    private fun absorbStaleFormat(incoming: CameraStatus, formatReported: Boolean): Pair<CameraStatus, Double?> {
+        val pending = formatPin
+        val now = SystemClock.elapsedRealtime()
         val (next, remaining) =
             VideoFormat.absorbStale(
                 incoming,
                 formatPin,
-                SystemClock.elapsedRealtime(),
+                now,
                 formatReported,
             )
         formatPin = remaining
-        return next
+        val angle = if (pending != null && remaining == null && formatReported &&
+            now < pending.activeDeadline) pending.shutterAngle else null
+        if (pending?.shutterAngle != null && now >= pending.activeDeadline) {
+            _controlNote.value = "Frame rate unconfirmed; choose the shutter angle again"
+        }
+        return next to angle
     }
 
     private fun absorbStaleColor(incoming: CameraStatus, reported: CameraStatus): CameraStatus {
@@ -3651,11 +4191,19 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     private fun absorbStaleExpo(incoming: CameraStatus, reported: CameraStatus): CameraStatus {
-        val pin = expoPin ?: return incoming
-        val (next, remaining) =
-            pin.absorb(incoming, _status.value, SystemClock.elapsedRealtime(), reportedValues = reported)
+        val now = SystemClock.elapsedRealtime()
+        val pin = expoPin
+        val (next, remaining) = pin?.absorb(incoming, _status.value, now, reportedValues = reported)
+            ?: (incoming to null)
         expoPin = remaining
-        return next
+        val format = formatPin
+        val angle = format?.shutterAngle
+        // Exposure is a different stream of reports; even a matching shutter
+        // cannot release the angle until the requested FORMAT itself is reported.
+        return if (format != null && angle != null && now < format.activeDeadline &&
+            next.expoMode == CameraCommands.EXPO_MANUAL) {
+            next.copy(shutterDenom = ShutterAngle.denom(angle, format.expected.frameRate.fps, next.availableShutterDenoms))
+        } else next
     }
 
     private fun absorbStaleShootingMode(incoming: CameraStatus, reported: Boolean): CameraStatus {
@@ -4148,6 +4696,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     fun setGimbalMode(mode: GimbalMode) {
         if (!canChangeGimbalSettings()) return
         cancelProgrammedMove()
+        gimbalPrep.mode = null
         gimbalFollowFamilyConfirmed = false
         gimbalModePin = CameraValuePin(mode, SystemClock.elapsedRealtime() + 2_000L)
         _gimbalMode.value = mode
@@ -4186,6 +4735,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     fun setGimbalSpeed(speed: GimbalSpeed) {
         if (!canChangeGimbalSettings()) return
         cancelProgrammedMove()
+        gimbalPrep.speed = null
         gimbalSpeedPin = CameraValuePin(speed, SystemClock.elapsedRealtime() + 2_000L)
         _gimbalSpeed.value = speed
         datalink?.sendDuml(
@@ -4373,19 +4923,39 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         if (lastValidGimbalAttitudeAt == 0L) Double.POSITIVE_INFINITY else (nowMs - lastValidGimbalAttitudeAt) / 1000.0
 
     private fun prepProgrammedMoveGimbal() {
-        datalink?.sendDuml(
-            cmdSet = 0x04,
-            cmdId = CameraCommands.CMD_GIMBAL_PARAMS,
-            payload = CameraCommands.setGimbalTiltLock(false),
-            receiver = CameraCommands.RX_GIMBAL,
-        )
-        datalink?.sendDuml(
-            cmdSet = 0x04,
-            cmdId = CameraCommands.CMD_GIMBAL_PARAMS,
-            payload = CameraCommands.setGimbalSpeed(GimbalSpeed.FAST.wire),
-            receiver = CameraCommands.RX_GIMBAL,
-        )
-        Log.i(TAG, "gimbal-move: Fast+unlock")
+        gimbalPrep.prep(_gimbalSpeed.value, _gimbalMode.value).forEach { payload ->
+            datalink?.sendDuml(
+                cmdSet = 0x04,
+                cmdId = CameraCommands.CMD_GIMBAL_PARAMS,
+                payload = payload,
+                receiver = CameraCommands.RX_GIMBAL,
+            )
+        }
+        Log.i(TAG, "gimbal-move: Fast+unlock restore speed=${gimbalPrep.speed?.label} mode=${gimbalPrep.mode?.label}")
+    }
+
+    /** Put back the speed/tilt lock that [prepProgrammedMoveGimbal] replaced. */
+    private fun restoreGimbalPrep(restore: GimbalPrepRestore.Restore?) {
+        restore ?: return
+        val link = datalink ?: return
+        val deadline = SystemClock.elapsedRealtime() + 2_000L
+        restore.speed?.let {
+            gimbalSpeedPin = CameraValuePin(it, deadline)
+            _gimbalSpeed.value = it
+        }
+        if (restore.mode == GimbalMode.TILT_LOCKED && _gimbalMode.value == GimbalMode.FOLLOW) {
+            gimbalModePin = CameraValuePin(GimbalMode.TILT_LOCKED, deadline)
+            _gimbalMode.value = GimbalMode.TILT_LOCKED
+        }
+        restore.payloads.forEach { payload ->
+            link.sendDuml(
+                cmdSet = 0x04,
+                cmdId = CameraCommands.CMD_GIMBAL_PARAMS,
+                payload = payload,
+                receiver = CameraCommands.RX_GIMBAL,
+            )
+        }
+        Log.i(TAG, "control: gimbal restore speed=${restore.speed?.label} mode=${restore.mode?.label}")
     }
 
     private fun publishMoveDebug(text: String, force: Boolean) {
@@ -4418,6 +4988,8 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     private fun resetGimbalControls() {
+        // Before the link closes: do not leave the camera on Fast for the next session.
+        restoreGimbalPrep(gimbalPrep.restoreNow())
         cancelProgrammedMove()
         lastValidGimbalAttitudeAt = 0L
         lastNativeGimbalPose = null
@@ -4559,6 +5131,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         if (sendClear) lastOperatorClearAt = SystemClock.elapsedRealtime()
         lastLiveTrackingAt = null
         lastSubjectPushAt = null
+        trackingRequest = null
         refreshTrackingHud()
         if (!sendClear || !had || datalink == null) return
         fireKind(SwiftCore.CMD_CLEAR_TRACKING_BOX, null, "Track clear")
@@ -4610,10 +5183,20 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         refreshTrackingHud()
     }
 
+    /** Drop the camera's previous subject until it reports the operator's new box. */
+    private fun acceptsTrackingReport(box: TrackingBox, now: Long): Boolean {
+        val requested = trackingRequest ?: return true
+        val since = trackingRequestAt?.let { (now - it) / 1000.0 }
+        if (!TrackingStartPolicy.accepts(box, requested, since)) return false
+        trackingRequest = null
+        return true
+    }
+
     private fun applyLiveTrackingPush(payload: ByteArray) {
         val now = SystemClock.elapsedRealtime()
         if (!TrackingClearPolicy.shouldApplyLivePush(lastOperatorClearAt, now)) return
         val box = TrackingBox.parseLivePush(payload) ?: return
+        if (!acceptsTrackingReport(box, now)) return
         lastSubjectPushAt = now
         subjectBox = smoothedSubject(box)
         isTracking = true
@@ -4629,6 +5212,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         if (!TrackingClearPolicy.shouldApplyLivePush(lastOperatorClearAt, now)) return
         when (val poll = TrackingPoll.parse(payload)) {
             is TrackingPoll.Locked -> {
+                if (poll.box?.let { acceptsTrackingReport(it, now) } == false) return
                 isTracking = true
                 trackingSawLock = true
                 val cameraBox = poll.box
@@ -4782,7 +5366,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     ): Boolean {
         ensureEndpointCommandCurrent(audioGeneration)
         val dl = datalink
-        if (dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
+        if (!controlLeaseAllows() || dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
             _controlNote.value = "not live"
             return false
         }
@@ -4834,7 +5418,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
         onSettle: ((Boolean) -> Unit)? = null,
     ) {
         val dl = datalink
-        if (dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
+        if (!controlLeaseAllows() || dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
             _controlNote.value = "not live"
             onFail?.invoke()
             onSettle?.invoke(false)
@@ -4880,10 +5464,13 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     }
 
     private fun transmit(send: InflightSend) {
+        if (!controlLeaseAllows()) return
         val dl = datalink ?: return
         pairingHold.remove(SwiftCore.waitKey(send.kind))
         try {
-            lastCameraSetAt = SystemClock.elapsedRealtime()
+            val sentAt = SystemClock.elapsedRealtime()
+            lastCameraSetAt = sentAt
+            controlLease?.noteSet(sentAt)
             dl.sendCommand(send.kind, send.extra)
             Log.i(TAG, "control: send ${send.name}")
         } catch (e: Exception) {
@@ -5009,7 +5596,7 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
     ): Boolean {
         ensureEndpointCommandCurrent(audioGeneration)
         val dl = datalink
-        if (dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
+        if (!controlLeaseAllows() || dl == null || !endpointCommandAdmission.allows(dl.isClosed, dl.isRebuilding)) {
             _controlNote.value = "not live"
             return false
         }
@@ -5095,8 +5682,13 @@ class PocketCameraSession(context: Context, borrowing: HevcDecoder? = null) : Ca
 
     companion object {
         private const val TAG = "PocketCameraSession"
+        private const val IDENTITY_KEY = 0x0707
+        private const val STATION_FIND_MS = 60_000L
+        private const val STATION_SUBSCRIBE_SETTLE_MS = 150L
     }
 }
+
+private fun hexBytes(bytes: ByteArray): String = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }
 
 internal fun phaseAllowsReconnect(phase: ConnectionPhase): Boolean =
     when (phase) {
@@ -5118,6 +5710,13 @@ internal object LiveViewEnablePolicy {
     const val GOP_GRACE_MS = 8_000L
     /** Endpoint repair and decoder-rebuild picture deadline. Matches iOS 16 s. */
     const val ENDPOINT_PICTURE_GRACE_MS = 16_000L
+    /** Core `enableAnswerWindow`: an unanswered encoder-pause enable escalates after this. */
+    const val ENABLE_ANSWER_MS = 1_500L
+    /** Core `keyframeResendInterval` / `keyframeRequestLimit` for the decoder repair. */
+    const val KEYFRAME_RESEND_MS = 2_000L
+    const val KEYFRAME_REQUEST_LIMIT = 2
+    /** Core `maxHeldRepairCycles`: repair deadlines (~60 s) before BLE recovery may run. */
+    const val MAX_HELD_REPAIR_CYCLES = 3
     const val REBUILD_BACKOFF_MS = 60_000L
     const val COOLDOWN_MS = 15_000L
     const val REBUILD_COOLDOWN_MS = 5_000L
@@ -5126,7 +5725,6 @@ internal object LiveViewEnablePolicy {
     const val COMMAND_TIMEOUT_REBUILD_COUNT = 2
     const val FIRST_PICTURE_RESEND_MS = 2_000L
     const val FORMAT_POKE_MIN_SETTLE_MS = 800L
-    const val STALLED_FORMAT_RESEND_MS = 5_000L
     const val FORMAT_STALL_MS = 2_000L
     const val HANDSHAKE_RETRY_PAUSE_MS = 500L
     const val HANDSHAKE_OPEN_RETRY_LIMIT = 6
@@ -5233,6 +5831,7 @@ internal object LiveViewEnablePolicy {
         val lastPresentedAt: Long? = null,
         val decoderOutputExpected: Boolean = false,
         val referenceRecoveryNeeded: Boolean = false,
+        val lastIrapAt: Long? = null,
         val repairReady: Boolean = true,
     )
 
@@ -5370,6 +5969,55 @@ internal object LiveViewEnablePolicy {
         coreFlag("shouldStartFeedRecovery", "{\"rebuildInFlight\":$rebuildInFlight}") {
             !rebuildInFlight
         }
+
+    enum class DecoderRepairStep { WAIT, RESEND_KEYFRAME, REBUILD_ENDPOINT, DEADLINE }
+
+    /** Core `FeedWatchdog.decoderRepairStep`: resend until answered, then the endpoint. */
+    fun decoderRepairStep(
+        sinceRepairStartMs: Long,
+        sinceEnableMs: Long,
+        sinceIrapMs: Long?,
+        keyframeRequests: Int,
+    ): DecoderRepairStep {
+        val core =
+            coreDecision(
+                "decoderRepairStep",
+                "{\"secondsSinceRepairStart\":${sinceRepairStartMs / 1000.0}," +
+                    "\"secondsSinceLastEnable\":${sinceEnableMs / 1000.0}," +
+                    "\"secondsSinceLastIrap\":${secJson(sinceIrapMs)}," +
+                    "\"keyframeRequests\":$keyframeRequests}",
+            )
+        return when (core) {
+            "wait" -> DecoderRepairStep.WAIT
+            "resendKeyframe" -> DecoderRepairStep.RESEND_KEYFRAME
+            "rebuildEndpoint" -> DecoderRepairStep.REBUILD_ENDPOINT
+            "deadline" -> DecoderRepairStep.DEADLINE
+            else -> {
+                if (sinceRepairStartMs >= ENDPOINT_PICTURE_GRACE_MS) return DecoderRepairStep.DEADLINE
+                val answered = sinceIrapMs != null && sinceIrapMs < sinceEnableMs
+                if (answered || sinceEnableMs < KEYFRAME_RESEND_MS) return DecoderRepairStep.WAIT
+                if (keyframeRequests < KEYFRAME_REQUEST_LIMIT) DecoderRepairStep.RESEND_KEYFRAME
+                else DecoderRepairStep.REBUILD_ENDPOINT
+            }
+        }
+    }
+
+    /**
+     * Core `FeedWatchdog.nextSessionHoldCycles`: no BLE teardown while video arrives,
+     * for at most [MAX_HELD_REPAIR_CYCLES] repair deadlines per episode. 0 releases.
+     */
+    fun nextSessionHoldCycles(videoAgeMs: Long?, previousCycles: Int, pictureSinceLastCycle: Boolean): Int {
+        val core =
+            coreDecision(
+                "nextSessionHoldCycles",
+                "{\"lastVideoPacketAge\":${secJson(videoAgeMs)},\"previousCycles\":$previousCycles," +
+                    "\"pictureSinceLastCycle\":$pictureSinceLastCycle}",
+            )?.toIntOrNull()
+        if (core != null) return core
+        val cycles = (if (pictureSinceLastCycle) 0 else maxOf(0, previousCycles)) + 1
+        val videoLive = videoAgeMs != null && videoAgeMs < STALL_MS
+        return if (videoLive && cycles < MAX_HELD_REPAIR_CYCLES) cycles else 0
+    }
 
     fun shouldRepeatRecoverEnable(
         sinceEnableMs: Long,
@@ -5619,8 +6267,6 @@ internal object LiveViewEnablePolicy {
         return ingestArmed
     }
 
-    fun shouldUseCapturedLiveStartForMediaResume(): Boolean = true
-
     /** Pocket: `0x02/0x68` `08` immediately before `0x09/0xa8`. Not Nano. */
     fun shouldSendLiveViewPrepare(usesNanoLiveViewGate: Boolean): Boolean =
         coreFlag(
@@ -5643,11 +6289,6 @@ internal object LiveViewEnablePolicy {
             "shouldContinueFirstPictureAfterStrayPlayback",
             "{\"hasPicture\":$hasPicture}",
         ) { !hasPicture }
-
-    /**
-     * Mimo 20260828: HEVC at join+17 ms. Do not wait a DUML ACK before arming.
-     */
-    fun shouldWaitForLiveViewAckBeforeArm(): Boolean = false
 
     fun shouldKeepaliveRebuildUDP(
         flowNeedsRebuild: Boolean,
@@ -5767,10 +6408,16 @@ internal object LiveViewEnablePolicy {
             if (decoderNeedsRepair &&
                 (auAge ?: Long.MAX_VALUE) < STALL_MS
             ) {
-                if (state.stage == Stage.FULL_REJOIN || state.stage == Stage.COOLDOWN) {
+                // Twin of FeedWatchdog: cooldown ends, and an IRAP after the last
+                // enable answered it, so a new loss gets its own request.
+                if ((state.stage == Stage.FULL_REJOIN || state.stage == Stage.COOLDOWN) &&
+                    snap.now - state.lastActionAt < COOLDOWN_MS
+                ) {
                     return Action.NONE
                 }
-                if (shouldHoldForGopReset(sinceEnable, videoAge)) return Action.NONE
+                val irapAnsweredEnable =
+                    snap.lastIrapAt != null && snap.lastEnableAt != 0L && snap.lastIrapAt > snap.lastEnableAt
+                if (!irapAnsweredEnable && shouldHoldForGopReset(sinceEnable, videoAge)) return Action.NONE
                 if (shouldHoldForControlGrace(snap, outputAge)) return Action.NONE
                 return fire(state, Action.REBUILD_DECODER, snap.now)
             }
@@ -5805,7 +6452,9 @@ internal object LiveViewEnablePolicy {
         }
 
         if (assemblyStalled || (controlReceiveAlive(snap) && !udpReceiveAlive(snap))) {
-            if (state.stage != Stage.IDLE && snap.now - state.lastActionAt < ESCALATE_MS) {
+            // Twin of FeedWatchdog: an unanswered enable escalates after ENABLE_ANSWER_MS.
+            val rungWait = if (state.stage == Stage.RESEND_ENABLE) ENABLE_ANSWER_MS else ESCALATE_MS
+            if (state.stage != Stage.IDLE && snap.now - state.lastActionAt < rungWait) {
                 return Action.NONE
             }
             if (state.encoderPauseEnables < 1) {
@@ -5867,25 +6516,5 @@ internal object LiveViewEnablePolicy {
             }
         state.lastActionAt = now
         return action
-    }
-
-    /** Legacy gate used by tests: first-picture 2 s, stalled format 5 s — never 1 Hz. */
-    fun shouldResendEnable(
-        videoPackets: Int,
-        nowElapsedRealtime: Long,
-        lastIdrRequest: Long,
-        hasFormat: Boolean,
-        decoderErrors: Int,
-        streamStartedAt: Long?,
-    ): Boolean {
-        if (videoPackets == 0) {
-            return nowElapsedRealtime - lastIdrRequest >= FIRST_PICTURE_RESEND_MS
-        }
-        val started = streamStartedAt ?: nowElapsedRealtime
-        val stalled =
-            (decoderErrors > 0 && !hasFormat) ||
-                (!hasFormat && nowElapsedRealtime - started > FORMAT_STALL_MS)
-        if (!stalled) return false
-        return nowElapsedRealtime - lastIdrRequest >= STALLED_FORMAT_RESEND_MS
     }
 }

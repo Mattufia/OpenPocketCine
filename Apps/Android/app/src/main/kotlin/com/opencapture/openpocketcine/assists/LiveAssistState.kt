@@ -16,9 +16,9 @@ import org.json.JSONObject
 /**
  * Live-view assist toggles, options, and clean-view pins.
  *
- * [mirror] is the horizontal flip flag. [LiveAssistLayer] never flips the video;
- * [LiveViewScreen] should apply `graphicsLayer { scaleX = if (state.mirror) -1f else 1f }`
- * so the recording and scopes stay unmirrored.
+ * [mirror] is the MIRROR tool; [mirrorsHorizontally] / [flipsVertically] are the axes it
+ * shows. [LiveAssistLayer] never flips the video; the video surface owner does, so the
+ * recording and scopes stay unmirrored.
  */
 class LiveAssistState(
     encoded: String? = null,
@@ -62,11 +62,25 @@ class LiveAssistState(
         private set
 
     /**
-     * Horizontal flip of the monitored picture. Overlay chrome does not apply this;
-     * the video surface owner must.
+     * MIRROR tool on. Overlay chrome does not apply this; the video surface owner must.
+     * [mirrorHorizontal] / [mirrorVertical] pick the axes (iOS parity).
      */
     var mirror by mutableStateOf(false)
         private set
+    var mirrorHorizontal by mutableStateOf(true)
+        private set
+    var mirrorVertical by mutableStateOf(false)
+        private set
+
+    /** Live picture flips as shown. The tool on with an axis off leaves that axis alone. */
+    val mirrorsHorizontally: Boolean get() = mirror && mirrorHorizontal
+    val flipsVertically: Boolean get() = mirror && mirrorVertical
+
+    fun setMirrorAxes(horizontal: Boolean = mirrorHorizontal, vertical: Boolean = mirrorVertical) {
+        mirrorHorizontal = horizontal
+        mirrorVertical = vertical
+        persist()
+    }
 
     /** iOS `splitComparison` — 50/50 log vs LUT. Monitor-only. */
     var splitComparison by mutableStateOf(false)
@@ -210,18 +224,11 @@ class LiveAssistState(
     var playbackVisibleTools by mutableStateOf(parsePlayback(playbackNames))
         private set
 
-    /**
-     * Latest GLES tap. WAVE / PARADE / HISTO / VECTOR / LIGHTS read this;
-     * [lumaHistogram] mirrors native luma counts for tests.
-     */
+    /** Latest GLES tap. WAVE / PARADE / HISTO / VECTOR / LIGHTS read this. */
     var scopeBundle by mutableStateOf(ScopeAssistBundle.EMPTY)
-
-    /** Optional 256-bin luminance histogram. Null / all-zero draws empty bins. */
-    var lumaHistogram by mutableStateOf<IntArray?>(null)
 
     fun acceptScopeBundle(bundle: ScopeAssistBundle) {
         scopeBundle = bundle
-        lumaHistogram = bundle.samples.histogramLuma
     }
 
     init {
@@ -271,8 +278,6 @@ class LiveAssistState(
         persist()
     }
 
-    fun nudgeLutExposure(delta: Double) = updateLutExposure(lutExposureStops + delta)
-
     fun updateLutExposure(stops: Double) {
         val next = LutExposureCompensation.snap(stops)
         if (next == lutExposureStops) return
@@ -317,16 +322,6 @@ class LiveAssistState(
 
     fun isPlaybackVisible(tool: LiveAssistTool): Boolean = tool in playbackVisibleTools
 
-    /** LUT / PEAK / FALSE / ZEBRA / scopes — used to gate a processed present path. */
-    fun playbackNeedsProcessedFeed(): Boolean =
-        playbackVisibleTools.any { it in processedPlaybackTools }
-
-    fun playbackNeedsScopeTap(): Boolean =
-        playbackVisibleTools.any { it in stackableScopeTools }
-
-    fun playbackNeedsLookOverlay(): Boolean =
-        playbackVisibleTools.any { it in lookOverlayTools }
-
     fun togglePlayback(tool: LiveAssistTool) {
         if (tool !in LiveAssistTool.playbackToolbarCases) return
         playbackVisibleTools =
@@ -338,15 +333,6 @@ class LiveAssistState(
         if (tool !in LiveAssistTool.cleanPinCases) return
         pinned = if (tool in pinned) pinned - tool else pinned + tool
         onPersistPins?.invoke(pinned.map { it.name }.toSet())
-    }
-
-    fun cycleGuide() {
-        val all = GuideAspect.ratios(guideFamily)
-        val idx = all.indexOf(guideAspect)
-        guideAspect = if (idx < 0) all.firstOrNull() ?: GuideAspect.CINEMA else all[(idx + 1) % all.size]
-        selectedGuides = setOf(guideAspect)
-        guides = true
-        persist()
     }
 
     fun toggleGuide(aspect: GuideAspect) {
@@ -575,6 +561,8 @@ class LiveAssistState(
             .put("lutExposureStops", lutExposureStops)
             .put("splitComparison", splitComparison)
             .put("splitVertical", splitVertical)
+            .put("mirrorHorizontal", mirrorHorizontal)
+            .put("mirrorVertical", mirrorVertical)
             .put("crushClipCompensation", crushClipCompensation.raw)
             .put("waveMode", waveMode.label)
             .put("waveBrightness", waveBrightness)
@@ -651,6 +639,8 @@ class LiveAssistState(
         lutExposureStops = LutExposureCompensation.snap(obj.optDouble("lutExposureStops", 0.0))
         splitComparison = obj.optBoolean("splitComparison", false)
         splitVertical = obj.optBoolean("splitVertical", true)
+        mirrorHorizontal = obj.optBoolean("mirrorHorizontal", true)
+        mirrorVertical = obj.optBoolean("mirrorVertical", false)
         guideAspect = GuideAspect.fromPersisted(obj.optString("guideAspect", GuideAspect.CINEMA.label))
         guideFamily = GuideFamily.fromPersisted(obj.optString("guideFamily", GuideFamily.FILM.label))
         val restored = buildSet {

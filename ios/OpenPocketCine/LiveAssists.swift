@@ -75,8 +75,8 @@ enum LiveAssistTool: String, CaseIterable, Identifiable {
 
     var hasConfiguration: Bool {
         switch self {
-        // Mirror stays tap-only; audio options affect presentation only.
-        case .mirror, .instantReview, .magnification, .level, .evMeter:
+        // Audio options affect presentation only.
+        case .instantReview, .magnification, .level, .evMeter:
             false
         default: true
         }
@@ -214,6 +214,9 @@ final class LiveAssistState {
     var level = false
     var desqueeze = false
     var mirror = false
+    /// MIRROR axes. Tap toggles the tool; the options pick which axes it flips.
+    var mirrorHorizontal = true
+    var mirrorVertical = false
     var instantReview = false
     var guideAspect: GuideAspect = .cinema
     var guideFamily: GuideFamily = .film
@@ -340,7 +343,8 @@ final class LiveAssistState {
             allowsTransferInference: !liveIsPhoto,
             splitComparison: splitComparison && isVisible(.lut),
             splitVertical: splitVertical,
-            mirror: isVisible(.mirror),
+            mirror: mirrorsHorizontally,
+            mirrorVertical: flipsVertically,
             desqueezeFactor: isVisible(.desqueeze) ? desqueezeFactor : 1,
             desqueezeHorizontal: desqueezeHorizontal,
             trafficThreshold: crushClipCompensation.pixelFractionThreshold
@@ -365,7 +369,8 @@ final class LiveAssistState {
         fx.lutDimension = isPlaybackVisible(.lut) ? lutDimension : 0
         fx.lutRGBA = isPlaybackVisible(.lut) ? lutRGBA : Data()
         fx.splitComparison = splitComparison && isPlaybackVisible(.lut)
-        fx.mirror = isPlaybackVisible(.mirror)
+        fx.mirror = isPlaybackVisible(.mirror) && mirrorHorizontal
+        fx.mirrorVertical = isPlaybackVisible(.mirror) && mirrorVertical
         fx.desqueezeFactor = isPlaybackVisible(.desqueeze) ? desqueezeFactor : 1
         return fx.withInspectorDemand(inspectorSceneActive && gradesClip ? configureTool : nil)
     }
@@ -417,6 +422,10 @@ final class LiveAssistState {
         if clean { return tool != .evMeter && cleanViewPinnedTools.contains(tool) }
         return true
     }
+
+    /// Live picture flips as shown. The tool on with an axis off leaves that axis alone.
+    var mirrorsHorizontally: Bool { isVisible(.mirror) && mirrorHorizontal }
+    var flipsVertically: Bool { isVisible(.mirror) && mirrorVertical }
 
     func toggleCleanViewPin(_ tool: LiveAssistTool) {
         guard LiveAssistTool.cleanPinCases.contains(tool) else { return }
@@ -758,6 +767,7 @@ enum OperatorPrefs {
         "OpenPocketCine.VirtualJoystickDeadzonePercent"
     private static let virtualJoystickResponseCurveKey =
         "OpenPocketCine.VirtualJoystickResponseCurve"
+    private static let virtualJoystickSizeKey = "OpenPocketCine.VirtualJoystickSize"
     private static let gimbalRampKey = "OpenPocketCine.GimbalRamp"
     private static let gimbalDoubleTapKey = "OpenPocketCine.GimbalDoubleTap"
     private static let dispLiveKey = "OpenPocketCine.DispChrome.Live"
@@ -924,6 +934,11 @@ enum OperatorPrefs {
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: virtualJoystickResponseCurveKey)
         }
+    }
+
+    static var virtualJoystickSize: MonitorJoystickSize {
+        get { MonitorJoystickSize.parse(UserDefaults.standard.string(forKey: virtualJoystickSizeKey)) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: virtualJoystickSizeKey) }
     }
 
     static var virtualJoystickMapping: GimbalStick.Mapping {
@@ -1172,6 +1187,8 @@ enum OperatorPrefs {
         var lutArmed: Bool
         var lutExposureStops: Double?
         var crushClipCompensation: Int?
+        var mirrorHorizontal: Bool?
+        var mirrorVertical: Bool?
 
         init(_ s: LiveAssistState) {
             tools = LiveAssistTool.allCases.filter { s.isOn($0) }.map(\.rawValue)
@@ -1201,6 +1218,8 @@ enum OperatorPrefs {
             lutArmed = s.lutEnabled
             lutExposureStops = s.lutExposureStops
             crushClipCompensation = s.crushClipCompensation.rawValue
+            mirrorHorizontal = s.mirrorHorizontal
+            mirrorVertical = s.mirrorVertical
         }
 
         func apply(to s: LiveAssistState) {
@@ -1257,6 +1276,8 @@ enum OperatorPrefs {
                 s.crushClipCompensation = value
             }
             s.lutEnabled = lutArmed
+            s.mirrorHorizontal = mirrorHorizontal ?? true
+            s.mirrorVertical = mirrorVertical ?? false
         }
     }
 }
@@ -1271,6 +1292,8 @@ struct FeedAlignedAssists: View {
     var sceneFaces: [TrackingBox] = []
     var showFocusChrome = true
     var showTapFocusBox = true
+    /// AE lock: the focus / metering box turns yellow with an `AE-L` tag.
+    var aeLocked = false
     /// When set (letterboxed clip playback), framing overlays align to this rect
     /// instead of the full geometry — OpenZCine `FeedAlignedAssists(feed:)`.
     var feed: CGRect? = nil
@@ -1280,12 +1303,21 @@ struct FeedAlignedAssists: View {
     var pictureAspect: CGFloat? = nil
     /// Live 180 / MIRROR compose. Nil uses the assist chip only (playback).
     var pictureMirrored: Bool? = nil
+    /// MIRROR Vertical. Nil uses the assist chip only.
+    var pictureFlippedVertically: Bool? = nil
     @Environment(AppModel.self) private var model
 
     var body: some View {
         GeometryReader { proxy in
             let assist = model.assist
-            let mirrored = pictureMirrored ?? assist.isVisible(.mirror)
+            let mirrored = pictureMirrored ?? assist.mirrorsHorizontally
+            let flippedV = pictureFlippedVertically ?? assist.flipsVertically
+            let shown = { (box: TrackingBox) in
+                box.flipped(horizontal: mirrored, vertical: flippedV)
+            }
+            let shownFocus = CGPoint(
+                x: mirrored ? 1 - focusPoint.x : focusPoint.x,
+                y: flippedV ? 1 - focusPoint.y : focusPoint.y)
             // Live: framing aids sit on the de-squeezed picture. Playback already
             // letterboxes the raster (`feed`); do not re-apply live desqueeze there.
             let feed =
@@ -1316,7 +1348,7 @@ struct FeedAlignedAssists: View {
                 }
                 ForEach(Array(sceneFaces.enumerated()), id: \.offset) { _, box in
                     TrackingBracketView(
-                        rect: feedRect(mirroredBox(box, mirrored), in: focusFeed),
+                        rect: feedRect(shown(box), in: focusFeed),
                         color: LiveDesign.text.opacity(SceneFacePolicy.dimOpacity),
                         lineWidth: 1.6
                     )
@@ -1325,28 +1357,26 @@ struct FeedAlignedAssists: View {
                     switch overlay {
                     case .search(let box):
                         TrackingBoxView(
-                            feed: focusFeed, box: mirroredBox(box, mirrored))
+                            feed: focusFeed, box: shown(box))
                         FocusBoxView(
                             feed: focusFeed,
-                            normalized: mirrored
-                                ? CGPoint(x: 1 - focusPoint.x, y: focusPoint.y)
-                                : focusPoint
+                            normalized: shownFocus,
+                            aeLocked: aeLocked
                         )
                     case .subject(let box):
-                        SubjectBoxView(feed: focusFeed, box: mirroredBox(box, mirrored))
+                        SubjectBoxView(feed: focusFeed, box: shown(box))
                     case .face(let box):
                         TrackingBracketView(
-                            rect: feedRect(mirroredBox(box, mirrored), in: focusFeed),
+                            rect: feedRect(shown(box), in: focusFeed),
                             color: LiveDesign.text.opacity(0.92),
                             lineWidth: 1.6
                         )
                     case .focus:
-                        if showTapFocusBox {
+                        if showTapFocusBox || aeLocked {
                             FocusBoxView(
                                 feed: focusFeed,
-                                normalized: mirrored
-                                    ? CGPoint(x: 1 - focusPoint.x, y: focusPoint.y)
-                                    : focusPoint
+                                normalized: shownFocus,
+                                aeLocked: aeLocked
                             )
                         }
                     }
@@ -1373,12 +1403,6 @@ func overlayFeedRect(
         sourceSize: CGSize(width: pictureAspect, height: 1), in: raster, effects: effects)
 }
 
-private func mirroredBox(_ box: TrackingBox, _ mirror: Bool) -> TrackingBox {
-    guard mirror else { return box }
-    return TrackingBox(
-        x: 1 - box.x - box.width, y: box.y, width: box.width, height: box.height)
-}
-
 private func feedRect(_ box: TrackingBox, in feed: CGRect) -> CGRect {
     CGRect(
         x: feed.minX + box.x * feed.width,
@@ -1397,8 +1421,11 @@ enum LiveTrackingChrome {
         min(LiveDesign.cornerRadius, max(6, min(rect.width, rect.height) * 0.12))
     }
 
-    static func cancelRect(box: TrackingBox, feed: CGRect, mirrored: Bool) -> CGRect {
-        let rect = feedRect(mirroredBox(box, mirrored), in: feed)
+    static func cancelRect(
+        box: TrackingBox, feed: CGRect, mirrored: Bool, flippedVertically: Bool = false
+    ) -> CGRect {
+        let rect = feedRect(
+            box.flipped(horizontal: mirrored, vertical: flippedVertically), in: feed)
         let s = cancelHitSize
         return CGRect(x: rect.maxX - s / 2, y: rect.minY - s / 2, width: s, height: s)
     }
@@ -1507,20 +1534,34 @@ private struct SubjectBoxView: View {
 private struct FocusBoxView: View {
     let feed: CGRect
     let normalized: CGPoint
+    var aeLocked = false
 
     var body: some View {
         let side = min(feed.width, feed.height) * 0.14
         let rect = CGRect(x: 0, y: 0, width: side, height: side)
-        RoundedRectangle(
-            cornerRadius: LiveTrackingChrome.cornerRadius(for: rect), style: .continuous
-        )
-        .stroke(LiveDesign.accent, lineWidth: 1.5)
-        .shadow(color: .black.opacity(0.6), radius: 1)
-        .frame(width: side, height: side)
-        .position(
-            x: feed.minX + normalized.x * feed.width,
-            y: feed.minY + normalized.y * feed.height
-        )
+        let x = feed.minX + normalized.x * feed.width
+        let y = feed.minY + normalized.y * feed.height
+        // The tag sits right of the box, or left when the box is near the right edge.
+        let tagLeading = x + side / 2 + 26 > feed.maxX
+        ZStack {
+            RoundedRectangle(
+                cornerRadius: LiveTrackingChrome.cornerRadius(for: rect), style: .continuous
+            )
+            .stroke(aeLocked ? LiveDesign.aeLock : LiveDesign.accent, lineWidth: 1.5)
+            .shadow(color: .black.opacity(0.6), radius: 1)
+            .frame(width: side, height: side)
+            .position(x: x, y: y)
+            if aeLocked {
+                Text("AE-L")
+                    .font(MonitorTheme.font(9, weight: .semibold))
+                    .kerning(0.5)
+                    .foregroundStyle(LiveDesign.aeLock)
+                    .shadow(color: .black.opacity(0.8), radius: 1.5, y: 0.5)
+                    .fixedSize()
+                    .position(
+                        x: tagLeading ? x - side / 2 - 14 : x + side / 2 + 14, y: y - side / 2 + 6)
+            }
+        }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -1649,10 +1690,12 @@ struct FeedLevelView: View {
             let mode = model.session.levelReading.mode(
                 now: ProcessInfo.processInfo.systemUptime,
                 // Picture-relative like the stick: TT180 mirrors the shown
-                // picture in both Selfie Flip states.
+                // picture in both Selfie Flip states. Either flip axis reverses
+                // the on-screen roll; both (180°) restores it.
                 viewFlip: GimbalStick.liveInvertPan(
                     poseInvert: model.session.gimbalPoseInvertPan,
-                    assistMirror: model.assist.isVisible(.mirror)))
+                    assistMirror: model.assist.mirrorsHorizontally)
+                    != model.assist.flipsVertically)
             content(mode)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Level")
@@ -1751,6 +1794,7 @@ struct AssistToolRow: View {
             }
             .padding(.horizontal, 2)
         }
+        .monitorScrollFade(.horizontal)
         .allowsHitTesting(!isLocked)
     }
 }

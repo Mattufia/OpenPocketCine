@@ -8,19 +8,24 @@ Multiview is available on iPhone, iPad and Android phones. See
 [Android differences](#android-differences) for what changes on Android.
 
 From **Your cameras**, tap the grid icon at the top-right of the camera list.
-A centered two-step popup sets up the shared network, then Center stage opens
-with space for four cameras. Exit sits at the top-left, the shared record lamp at the
-bottom-right, and Layout/Wi-Fi/Fit/Fill share a compact bottom strip. The picker lists discovered Osmo devices. Pocket 3, Pocket 4, Pocket 4 Pro and Nano can attempt shared-network setup; Pocket 3 is recognized even when its Bluetooth advertisement omits the model ID. Action, 360 and older/unprofiled Osmo devices offer “Try experimental shared Wi-Fi”; preview remains unavailable until their preview commands are implemented. Discovery visibility does not mean working preview support. Pocket 3, Pocket 4 Pro and Nano have been monitored together on an iPhone, with recording start/stop confirmed on all three. Nano uses its existing AVC preview decoder
+The shared-network wizard confirms the phone's network, then Center stage opens
+with space for four cameras. Exit sits at the top-left with Live View Lock
+styling. The Wi-Fi icon uses the Live View Settings position; there is no session
+title or connected-camera count. LUT, Fit/Fill, Layout and Camera settings share
+the toolbar. Record and DISP stay in their normal
+Live View positions: Record is bottom-right with DISP above it in landscape,
+and centered in the bottom row with DISP to its left in portrait. The picker lists discovered Osmo devices. Pocket 3, Pocket 4, Pocket 4 Pro and Nano can attempt shared-network setup; Pocket 3 is recognized even when its Bluetooth advertisement omits the model ID. Action, 360 and older/unprofiled Osmo devices offer “Try experimental shared Wi-Fi”; preview remains unavailable until their preview commands are implemented. Discovery visibility does not mean working preview support. Pocket 3, Pocket 4 Pro and Nano have been monitored together on an iPhone, with recording start/stop confirmed on all three. Nano uses its existing AVC preview decoder
 and model-specific preview start commands. The station-Wi-Fi provisioning
 commands have been accepted by Pocket 4 Pro and by Nano on a WPA2 network.
 For Nano, use WPA2: the tested network returned join failures on WPA3 and
 a successful join reply after switching to WPA2 with the same credentials. Cameras join your shared Wi-Fi while remaining
 in normal Video mode. This path needs no RTMP stream or external server.
 
-1. Each time you open Multiview, choose **Local Wi-Fi** (a router or another
-   device’s hotspot) or **Personal Hotspot** (this phone). Select or enter the
-   network name, then enter its password; a saved password can fill it in.
-2. Tap **Done** in the password prompt. For local Wi-Fi, approve the phone’s
+1. Each time you open Multiview, choose **Wi-Fi** (**Local Wi-Fi** on Android)
+   for a router or another device's hotspot, or choose this phone's **Hotspot**.
+   Select or enter the network name, then enter its password; a saved password
+   can fill it in.
+2. Tap **Connect over Wi-Fi** for a local network. Approve the phone's
    network-join prompt if shown. Then add cameras to the empty tiles.
 3. Set each camera to Video mode, stop recording and close other camera apps.
 4. Tap **Add camera**, choose a nearby camera and approve pairing if asked.
@@ -49,20 +54,23 @@ attempt. Only the observed transient rejection is retried, at most three
 attempts with five seconds between attempts. A missing join reply first triggers verified LAN discovery before a bounded retry. Other explicit rejections stop setup.
 
 Each tile has its own normal camera datalink, decoder and acknowledgement loop.
-The single button at the bottom-right of each tile starts recording (play icon)
-or stops it (square icon). It uses fresh camera status to choose the action,
+Open a tile's camera options to start or stop recording for that camera. It uses fresh camera status to choose the action,
 shows progress while awaiting confirmation and is disabled when status is stale.
 The icon also follows recording changes made on the camera itself. Commands use
 the existing connection; rejected or unconfirmed commands are not resent.
 
-**Record all** starts all assigned cameras concurrently. If any camera is
-recording, it becomes **Stop all**. It is disabled while any assigned camera
+The shared record lamp starts all assigned cameras concurrently. If any camera
+is recording, the lamp stops recording on the assigned cameras. Its accessible
+name describes the group action; there is no separate Record all caption. It is disabled while any assigned camera
 has unavailable recording status. Each camera must confirm its own result;
 partial failures remain visible. This is a shared command, not frame-accurate
 synchronized recording.
 
+Both the shared lamp and a camera's recording action follow the Record
+confirmation preference in Settings.
+
 Removing a tile closes monitoring for that tile. Its camera stays on shared
-Wi-Fi and any recording continues. Use the tile’s stop button before closing when
+Wi-Fi and any recording continues. Use the tile’s recording action before closing when
 you want to end a recording. Closing Multiview attempts to return assigned
 cameras to their own Wi-Fi; see Saved stages and concurrent setup below.
 
@@ -87,47 +95,95 @@ See [BLE provisioning](https://openpocketcine.app/docs/protocol/ble/) for the ob
 
 ## Layout and per-camera monitoring
 
-The Layout button switches between **2 × 2 grid** and **Center stage**. Grid
-tiles fill the available area between the floating controls rather than keeping
-a fixed 16:9 shape. FIT preserves the complete picture inside each tile; FILL
-crops to fill the tile. In landscape, Center stage shows one large feed with three
-smaller 16:9 tiles stacked on the right. In portrait, the 16:9 main tile sits
-above a centered vertical strip of secondary tiles. Tap a smaller tile to promote it. Fit shows
-the complete picture; Fill crops to the available tile without stretching it.
-Switching layouts keeps the existing video hosts and camera sessions alive.
+The Layout button switches between **Grid** and **Center stage**. Grid uses four
+equal portrait rows or a 2×2 landscape arrangement, filling the available area
+without a fixed aspect ratio. Portrait Center stage keeps its full-width 16:9
+main feed above the other cameras. On short resized windows, the main feed fits
+smaller at 16:9 to keep the remaining cameras and controls reachable.
 
-Camera names and remove controls float over each picture without a solid header.
-Each tile shows camera-reported resolution, frame rate, color, ISO, shutter and
-white balance. Unknown values show a dash. These are readouts, not shooting-setting
-controls. The preview dimensions can differ from the recording format shown.
+Landscape Center stage has a larger 16:9 main picture, with camera readouts over
+its shaded bottom edge. Wi-Fi sits beneath Exit on the left. The three other
+camera tiles scroll in a strip at the far right, above DISP and Record. Content
+fades softly at the edges where more cameras remain; tap a camera to promote it.
 
-Each **LUT** button independently toggles the camera-specific DJI Auto conversion
-to Rec.709. It follows the tile's reported color mode, including Nano D-Log M
+Multiview uses the same collapsible toolbar as View Assist. Tap its arrow to
+show Layout, Camera settings, FIT/FILL and LUT; scroll short toolbars to reach
+every control. In landscape Center stage it sits on the left, below any cutout.
+Grid aligns it with the right controls, or the left for a right-side cutout.
+Portrait keeps it on the right, below the main picture in Center stage.
+DISP and Record retain their Live View positions. FIT contains the source;
+FILL crops to cover the tile. Layout, selection and scrolling retain the camera
+sessions and video hosts.
+
+Camera names, models, reported timecode, battery/storage and recording state
+appear inside each feed, including the smaller portrait views. No information
+box occupies the side of a feed. Selected-camera ISO, shutter, white balance and
+focus readouts form a compact group at the bottom. **Camera settings** in the toolbar opens a floating popup. Select a connected camera's tab to change its settings using
+the same controls as Live View. Changes apply to that camera while the other
+feeds stay visible; available controls follow that camera's capabilities and
+recording state. Camera and setting tabs use a single bottom line with a highlighted segment
+for the selected tab, matching navigation elsewhere in the app.
+
+Timecode uses **HH:MM:SS**, without a frame field. Each tile uses Live View's
+camera battery gauge. iOS includes charge state and low-battery colors; Android
+uses its native amber gauge.
+Unknown values remain absent or show a dash; Nano has no reported timecode.
+Preview dimensions can differ from the recording format. Tap to select a camera without changing Grid; in
+Center stage, selecting a smaller camera promotes it to the main feed.
+Very short feeds show a compact identity and battery row; open camera options
+for the remaining details.
+
+**Auto LUT starts on for each newly added camera.** The toolbar toggles it for
+all cameras; a tile's camera options toggle it independently. Reconnecting or
+changing layout preserves that camera's choice. Auto LUT follows the tile's
+reported color mode, including Nano D-Log M
 and Pocket D-Log/D-Log2. Normal/HDR have no automatic cube conversion; unknown
 color waits for camera status. The LUT affects monitoring only.
 
-Small tiles use compact name overlays; tap one to bring its LUT, recording and settings controls into the main view.
+Every occupied tile's **…** button opens a compact floating camera menu for
+Live View, recording, LUT, reconnect and removal as available, including the
+smaller feeds. Tap outside the popup or close it to return to the stage.
 
 ## Network setup and recovery
 
-Center stage is the default. The record lamp matches Live View and applies to
-all assigned cameras whose status is current. The bottom strip uses the Live
-View glass styling.
+Exit returns cameras to their own Wi-Fi. A temporary pairing refusal gets a
+bounded automatic retry before an error is shown, so the operator does not need
+to press Exit again for that transition. Successfully restored cameras are left
+alone; cameras that still cannot be reached remain in the device's cleanup
+record for a later retry. Recording continues.
 
-On entry, a centered popup stays at most 460 points wide, including landscape.
-Page one chooses local Wi-Fi or Personal Hotspot. Page two lists Wi-Fi networks
-or shows hotspot details without a network picker. Selecting Wi-Fi or continuing
-from hotspot details opens a native password alert. Saved passwords are prefilled
-and kept in this device’s Keychain. The hotspot page reports interface detection;
-iOS does not provide a reliable hotspot-enabled flag, and the interface may
-appear only after a camera joins. Done joins the selected local network and verifies
-the phone’s network name and address before allowing camera setup. The current
-network name and app-saved local networks are offered as choices. Scanning with
-a camera is optional; selecting Local Wi-Fi does not start a scan. Credentials entered
-here are kept in this device’s Keychain and reused for later cameras and sessions.
-iOS does not let an app extract Wi-Fi passwords stored by Settings. For a network
-not previously saved in OpenPocketCine, enter its password once. Personal Hotspot
-must be enabled in Settings; the app cannot turn it on or read its password.
+Switching apps keeps the camera assignments. After returning, each feed checks
+for fresh pictures and attempts bounded recovery if needed. The iOS decoder-loss
+path now matches Live View's recovery signals. An iPhone with Pocket 4 Pro and
+Nano restored fresh pictures after 5-second and 35-second app switches.
+
+Center stage is the default. The record lamp matches Live View and applies to
+all assigned cameras whose status is current. The toolbar uses Live View glass
+styling. DISP hides optional chrome and restores it without moving the system
+controls or stopping a recording.
+
+Choose **Wi-Fi** (Local Wi-Fi on Android) or this phone's **Hotspot**. Wi-Fi
+shows the current network, networks saved by OpenPocketCine and nearby networks
+found by a camera. Opening it starts a bounded scan automatically. You can
+choose a current/saved network or use **Other network…** immediately; a camera
+is not required to enter the host's network. If the scan cannot finish, turn
+on a nearby camera and tap **Scan again**.
+
+The password screen remembers app-saved passwords, provides **Show password**,
+and explains WPA2 compatibility and guest-network isolation. **Connect over
+Wi-Fi** waits for any scan to return its camera to its own Wi-Fi and release
+Bluetooth, then joins and verifies the phone's network before opening the
+stage. A failed join stays on the same screen so you can correct the password
+or retry. On iOS this is the same wizard as a saved camera's **Add setup**.
+
+Passwords stay in this device's Keychain on iOS or encrypted with Android
+Keystore. The app cannot extract passwords saved by the system Settings app;
+enter each new network's password once. Hotspot setup includes Settings help,
+remembered name/password fields and interface detection. Enable the phone's
+hotspot in Settings; the app cannot turn it on or read its password. An
+undetected interface is not proof the hotspot is off: it may appear only once
+a camera joins. Use WPA2 and 2.4 GHz for compatibility. Both forms adapt to
+portrait and landscape.
 
 Adding a camera now uses the selected network directly. Camera Wi-Fi role changes
 wait for confirmation. A missing join reply triggers identity-verified LAN
@@ -140,7 +196,7 @@ Each preview uses the existing feed watchdog: respect camera-command and keyfram
 grace, recover the transport in stages, then try at most two full reconnects.
 The last picture remains visible. Thirty seconds of healthy video resets the
 reconnect budget. If recovery fails, the affected tile offers Reconnect and
-Remove; smaller thumbnails can be tapped to expose those controls. Removing a
+Remove through its camera options, including in smaller feeds. Removing a
 preview does not stop recording on the camera.
 
 In the recorded three-camera iPhone app-switch check, all feeds resumed, but
@@ -170,17 +226,20 @@ or head tracking started in the tile’s Live View.
 Hardware validation of full Live View controls and return-to-tile continuity is
 still required.
 
-Password alerts use compact copy and keep the stage stable during keyboard presentation in landscape. Preview gestures are attached behind tile controls so Add, LUT, Record and Remove keep their normal button behavior.
+Password entry uses a scrollable setup screen that accommodates the keyboard. Preview gestures are attached behind tile controls so Add, LUT, Record and Remove keep their normal button behavior.
 
-Back cancels an in-progress Wi-Fi scan immediately. Personal Hotspot setup refreshes the active hotspot-interface status every second and when returning from Settings. An undetected interface is not proof that the Settings switch is off: it may appear only when a camera joins. Exit and group recording sit in the outer screen corners, clear of the preview tiles.
+Cancelling setup waits for any active camera scan to restore its Wi-Fi and release Bluetooth. Personal Hotspot setup refreshes the active hotspot-interface status every second and when returning from Settings. An undetected interface is not proof that the Settings switch is off: it may appear only when a camera joins. Close remains in the header; DISP and group recording retain their normal Live View positions.
 
 The stage uses the same dark glass, typefaces, accent and control-bar sizing as Live View. Setup navigation, network rows and tile controls have at least 44-point touch targets; the entire empty tile opens Add camera. Portrait keeps the focused preview wide enough to expose its controls.
 
-Corner controls and the bottom bar use one outer margin of 5% of the shorter screen dimension, rather than stacking that margin on the landscape safe-area inset.
+Controls follow the current window's safe areas and display cutout. Native Live
+View geometry owns DISP and Record, independently of the stage and toolbar.
 
 Add camera opens a centered, width-limited picker with a scrollable nearby-camera list, including in landscape.
 
-The grid adapts to assigned cameras: one fills the stage, two share it side by side in landscape or vertically in portrait, and three or four use the 2×2 arrangement. Add camera remains available in empty tiles or a tile header when one or two feeds occupy the enlarged grid.
+Grid keeps four stable slots. The first empty slot offers Add camera; other
+unused slots stay quiet. Selecting, rotating or changing layouts moves existing
+feed views without opening an extra camera connection.
 
 Pocket preview orientation follows the same gimbal pose and Selfie Flip compensation as Live View, including with Auto LUT enabled.
 
@@ -221,7 +280,7 @@ only after you select a network. Layout, selected main slot and Fit/Fill are
 remembered. Brief app switches and returning from a tile's Live View keep the
 current session; they do not restart setup.
 
-After Done, each added camera joins the selected network independently. Remove
+After Connect, each added camera joins the selected network independently. Remove
 all assigned cameras before changing the network using **WI-FI** below FIT/FILL.
 
 Closing Multiview attempts to return cameras to their own Wi-Fi after closing
@@ -229,7 +288,7 @@ monitor connections. Approve a camera connection if prompted. Unfinished cleanup
 remains saved for another close attempt, including cleanup from older builds;
 opening setup does not reconnect old cameras or change their networks. Force
 quitting cannot reliably run cleanup. No stop-recording command is sent.
-A camera used for an optional Wi-Fi scan is also tracked before its role changes;
+A camera used for a Wi-Fi scan is also tracked before its role changes;
 finishing or cancelling the scan attempts to restore its own Wi-Fi.
 Physical checks of this revised setup, provisioning and AP return remain pending.
 
@@ -261,7 +320,7 @@ reports recording has stopped.
 
 ## Android differences
 
-Android follows the same stage, setup popup, camera picker, tile controls,
+Android follows the same stage, network wizard, camera picker, tile controls,
 recording, recovery and cleanup behavior described above. The differences:
 
 - **Phone hotspot** replaces Personal Hotspot. Turn on this phone's Wi-Fi
