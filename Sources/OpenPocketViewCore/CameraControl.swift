@@ -2538,6 +2538,38 @@ public enum CamFov {
     public static func isMedTele(lensMin: UInt16) -> Bool { lensMin >= medTeleThreshold }
     static let medTeleThreshold: UInt16 = lens1x + lens1x / 2
 
+    /// Why the body would ignore a Med-Tele swap right now, or nil when it takes
+    /// it. Each refusal was measured *silent* — no movement, no NACK — so the MT
+    /// button says so on the tap instead of waiting out a swap that never comes:
+    /// - colour other than Normal (D-Log M ignored the SET for 4 s; HLG and an
+    ///   unreported mode are refused too, because nobody has seen them work);
+    /// - recording (ignored mid-take, the same SET landed once REC stopped);
+    /// - any shooting mode but Video. SlowMo, TimeLapse and Low-Light were never
+    ///   probed, so they stay refused until one run says otherwise.
+    ///
+    /// ActiveTrack is not here: the swap works with a track running, it is the
+    /// subject that does not survive it, so the caller clears tracking instead.
+    public static func medTeleRefusal(
+        colorMode: ColorMode?, isRecording: Bool, shootingMode: Int
+    ) -> String? {
+        if isRecording { return "Med-Tele — stop recording first" }
+        if ShootingMode(rawValue: UInt8(truncatingIfNeeded: shootingMode)) != .video {
+            return "Med-Tele — Video mode only"
+        }
+        if colorMode != .normal { return "Med-Tele — Normal colour only" }
+        return nil
+    }
+
+    /// The fade to black a Med-Tele swap runs behind. The swap goes once the
+    /// picture is dark, so the body's lens change never shows.
+    public static let medTeleFadeMs = 100
+    /// Longest a Med-Tele swap waits for its crop reset to land before going.
+    public static let medTeleCropResetTimeoutMs = 1_500
+    /// How long a sent swap has to show up in the reported floor. Measured under
+    /// 1 s both ways over many runs; the deadline exists because the refusals are
+    /// silent, so an ignored swap would otherwise look like a slow one.
+    public static let medTeleSwapTimeoutMs = 2_000
+
     /// The chip cycle while Med-Tele holds the floor up: whole factors from the
     /// body's own floor to its own ceiling, which is 2x…4x on a Pocket 3.
     ///

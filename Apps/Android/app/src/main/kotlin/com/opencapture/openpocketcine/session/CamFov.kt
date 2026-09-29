@@ -82,6 +82,38 @@ object CamFov {
     private const val MED_TELE_THRESHOLD = LENS_1X + LENS_1X / 2
 
     /**
+     * Why the body would ignore a Med-Tele swap right now, or null when it takes it.
+     * Each refusal was measured *silent* (no movement, no NACK), so the MT button says
+     * so on the tap instead of waiting out a swap that never comes:
+     * - colour other than Normal (D-Log M ignored the SET for 4 s; HLG and an unreported
+     *   mode are refused too, because nobody has seen them work);
+     * - recording (ignored mid-take, the same SET landed once REC stopped);
+     * - any shooting mode but Video. SlowMo, TimeLapse and Low-Light were never probed,
+     *   so they stay refused until one run says otherwise.
+     *
+     * ActiveTrack is not here: the swap works with a track running, it is the subject
+     * that does not survive it, so the caller clears tracking instead. iOS
+     * `CamFov.medTeleRefusal`.
+     */
+    fun medTeleRefusal(colorMode: Int, isRecording: Boolean, shootingMode: Int): String? =
+        when {
+            isRecording -> "Med-Tele — stop recording first"
+            shootingMode != CameraCommands.SHOOT_VIDEO -> "Med-Tele — Video mode only"
+            colorMode != CameraCommands.COLOR_NORMAL -> "Med-Tele — Normal colour only"
+            else -> null
+        }
+
+    /** The fade to black a Med-Tele swap runs behind; the swap goes once it is dark. */
+    const val MED_TELE_FADE_MS = 100L
+    /** Longest a Med-Tele swap waits for its crop reset to land before going. */
+    const val MED_TELE_CROP_RESET_TIMEOUT_MS = 1_500L
+    /**
+     * How long a sent swap has to show up in the reported floor. Measured under 1 s both
+     * ways over many runs; the deadline exists because the refusals are silent.
+     */
+    const val MED_TELE_SWAP_TIMEOUT_MS = 2_000L
+
+    /**
      * The chip cycle while Med-Tele holds the floor up: whole factors from the body's own
      * floor to its own ceiling, which is 2×…4× on a Pocket 3.
      *

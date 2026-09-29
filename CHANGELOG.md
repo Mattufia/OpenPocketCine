@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- Pocket 3 **MT** button, beside the zoom chip: takes Med-Tele, the body's 2×
+  lens, on and off without leaving the app. Each tap takes any digital crop off
+  first and lands on the lens's base, 2× or 1×; the picture goes black over the
+  swap. The button is dimmed where the camera would silently ignore it: while
+  recording, outside Normal colour and outside Video mode. A tap there says why.
+  Not yet verified on a device in this form.
 - False color **Read** option for every scale on iOS and Android. LOG (the
   default) reads the raw signal like the waveform, with the full highlight
   range. 709 reads log through the camera's official Rec.709 look, the way RED

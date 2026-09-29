@@ -435,6 +435,9 @@ fun LivePortraitChrome(
                 onDial = model.session::updateZoomPinch,
                 onDialEnd = model.session::endZoomPinch,
             )
+            if (editing == null && model.session.supportsMedTele) {
+                LiveMedTeleButton(model.session, uiLocked, cluster.medTele)
+            }
         }
 
         if (!captureOpen && showGimbalButton && !gimbalButton.isEmpty) {

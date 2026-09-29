@@ -34,6 +34,10 @@ data class CameraModel(
 ) {
     val zoomMax: Double get() = activeZoomStops().lastOrNull() ?: 1.0
 
+    /** Pocket 3 / Xtra Muse, by advertised name. iOS `CameraModel.isPocket3`. */
+    val isPocket3: Boolean
+        get() = name.lowercase().replace(" ", "").let { it.contains("pocket3") || it.contains("muse") }
+
     val isoAutoRangeFloor: Int get() = Companion.isoAutoRangeFloorFor(name)
 
     /**
@@ -61,7 +65,6 @@ data class CameraModel(
         val n = name.lowercase().replace(" ", "")
         val isPro = n.contains("pocket4p") || n.contains("4pro")
         val isPocket4 = n.contains("pocket4")
-        val isPocket3 = n.contains("pocket3") || n.contains("muse")
         val digitalLocked =
             shootingMode == CameraCommands.SHOOT_SLOWMO ||
                 shootingMode == CameraCommands.SHOOT_TIMELAPSE ||

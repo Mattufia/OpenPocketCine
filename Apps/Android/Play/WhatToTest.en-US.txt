@@ -32,8 +32,8 @@ Fixes
 - Wi-Fi fields align, Connect stays above the keyboard, and connect or cancel waits for scan cleanup.
 - Deleting from clip playback works again: Delete and Cancel no longer play or pause the clip behind it.
 - Osmo Nano no longer shows zoom controls, and DISP settings list Zoom Chip and Gimbal Stick only when the camera has them.
-- Pocket 3 Med-Tele zoom cycles 2x to 4x; 2.7K 3x without it is a digital crop.
-- Live View no longer freezes for seconds after one dropped video packet. The picture returns with the camera's next keyframe.
+- Pocket 3: MT beside the zoom chip toggles Med-Tele, whose zoom cycles 2x to 4x.
+- Live View no longer freezes for seconds after one dropped video packet; the next keyframe brings it back.
 - Live View no longer crashes on MediaTek phones or with gimbal controls on some screens.
 
 What to test

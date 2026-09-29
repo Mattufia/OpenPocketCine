@@ -943,6 +943,29 @@ far-left stop and centred at 3.00×, confirming a 2…4 scale; the operator drov
 a drag end to end. Physical iOS verification remains pending: no iPhone is
 available to this project.
 
+### Pocket 3 MT button (2026-09-28)
+
+Med-Tele is a button, **MT**, beside the zoom chip (`GimbalCluster.medTele`, one
+per language, lockstep tests both sides), not a stop in the chip's cycle: the
+chip and dial zoom only inside the lens that is on. Both shells run the same
+sequence — `toggleMedTele` in `CameraSession` / `PocketCameraSession`:
+
+1. Refuse on the tap where the body would ignore it silently:
+   `CamFov.medTeleRefusal` (recording, outside Video, outside Normal colour).
+   Clear ActiveTrack, which the swap would orphan.
+2. Fade the picture to black (`medTeleFadeMs`).
+3. Take any digital crop off with a lens SET to the current base and wait for
+   the status to show it (`medTeleCropResetTimeoutMs`), because the swap keeps
+   the crop.
+4. Send `0x02/0xFF` once, without retries, and wait for the reported floor to
+   move (`medTeleSwapTimeoutMs`). The chip then takes the zoom the body reports.
+
+One swap at a time; the button takes no taps while one runs. Every wait is
+bounded, so the picture always comes back.
+
+Verification: core and shell unit tests both sides. Physical Android and iOS
+passes are pending for this shape; the earlier #398 shape was proven on Android.
+
 ### Pocket 3 optical stops per body (2026-09-21)
 
 Reported on Android at 2.7K30 with Med-Tele off: holding 3× captioned it
