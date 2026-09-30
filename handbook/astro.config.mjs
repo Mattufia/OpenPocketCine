@@ -2,12 +2,13 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// Local preview (`just handbook`) is the site root. GitHub Pages serves the
-// handbook under /docs/ — set HANDBOOK_BASE=/docs for that build.
+// Local preview (`just handbook`) is the site root. Production serves the
+// handbook at https://opencapture.org/openpocketcine/docs/, so that build sets
+// HANDBOOK_BASE=/openpocketcine/docs.
 const handbookBase = process.env.HANDBOOK_BASE || '/';
 
 export default defineConfig({
-  site: 'https://openpocketcine.app',
+  site: 'https://opencapture.org',
   base: handbookBase,
   trailingSlash: 'always',
   integrations: [
@@ -24,6 +25,9 @@ export default defineConfig({
       locales: {
         root: { label: 'English', lang: 'en' },
         'zh-tw': { label: '繁體中文', lang: 'zh-TW' },
+      },
+      editLink: {
+        baseUrl: 'https://github.com/erik-sutton95/OpenPocketCine/edit/main/handbook/',
       },
       social: [
         {

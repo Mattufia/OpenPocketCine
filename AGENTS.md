@@ -19,7 +19,6 @@ primarily **Osmo Pocket 4 / 4 Pro**, with Nano live view on AVC.
 | `Sources/OpenPocketCineAndroidFacade/` | Android JNI facade |
 | `docs/` | Engineering references |
 | `handbook/src/content/docs/` | Public docs site (apps, protocol, setup) |
-| `site/` | GitHub Pages landing |
 | `.github/` | CI and templates |
 
 `captures/` is gitignored.
@@ -51,7 +50,7 @@ primarily **Osmo Pocket 4 / 4 Pro**, with Nano live view on AVC.
 - **watchdog** — stall, GOP-reset grace, recover `0x09/0xa8`: [`docs/feed-watchdog.md`](docs/feed-watchdog.md)
 - **reliability** — freeze-in-seconds, ACK windows, repair owner: [`docs/connection-reliability.md`](docs/connection-reliability.md)
 - **protocol** — DUML, BLE, opcode, pktType, HEVC/AVC payload: `handbook/src/content/docs/protocol/`
-- **handbook** — public docs at openpocketcine.app/docs, setup, iOS/Android app pages: `handbook/src/content/docs/`
+- **handbook** — public docs at opencapture.org/openpocketcine/docs, setup, iOS/Android app pages: `handbook/src/content/docs/`
 - **hygiene** — commit/PR that might touch secrets, LUTs, captures, identity: [`docs/commit-hygiene.md`](docs/commit-hygiene.md)
 - **contributing** — issues vs discussions, labels, human setup: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **budget** — smoothness, fps, jank, HUD Hz, scope tap, ACK rate, thermal: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)

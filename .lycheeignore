@@ -5,4 +5,3 @@ handbook/src/content/
 handbook/node_modules
 handbook/dist
 handbook/.astro
-public-site

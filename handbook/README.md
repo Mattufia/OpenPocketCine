@@ -8,7 +8,10 @@ stay in the git repo and are not uploaded.
 When protocol, app UX, or setup changes, update the matching page in the same
 PR. Standard: `src/content/docs/contribute/documentation.md`.
 
-Published at [openpocketcine.app/docs](https://openpocketcine.app/docs/).
+Published at [opencapture.org/openpocketcine/docs](https://opencapture.org/openpocketcine/docs/).
+The source stays here. A merge to `main` that touches `handbook/` triggers a
+Vercel deploy hook (`.github/workflows/handbook-deploy.yml`). The rest of the
+website lives in the private repo `erik-sutton95/opencapture-site`.
 Preview from the repository root:
 
 ```bash
@@ -20,5 +23,4 @@ Then open [http://localhost:4321/](http://localhost:4321/).
 | Command | Action |
 | --- | --- |
 | `just handbook` | Dev server (site root, no `/docs/` prefix) |
-| `just handbook-build` | Production build to `handbook/dist/` |
-| `just handbook-stage` | Merge landing + handbook into `public-site/` as Pages will ship it |
+| `just handbook-build` | Production build (`/openpocketcine/docs/`) to `handbook/dist/` and link check |

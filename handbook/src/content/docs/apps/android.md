@@ -318,11 +318,11 @@ Pocket 3 1×/2×/4× with 4K max 2×). Nano is a fixed 1× lens: no zoom chip, p
 disc or controller zoom, and no gimbal stick or tap focus. Pocket 3's ceiling is
 per-FORMAT, not one generic 4×: **1080 4×, 2.7K 3×, 2160 1:1 3×, 4K 2×,
 3K 1:1 2×**
-([survey](https://openpocketcine.app/docs/devices/pocket-3/controls/#zoom-and-med-tele)). Zoom must not drop the live
+([survey](https://opencapture.org/openpocketcine/docs/devices/pocket-3/controls/#zoom-and-med-tele)). Zoom must not drop the live
 picture. FORMAT lists `camcap_video_format` pairs (2.7K / 4:3 / 1:1 / 9:16
 when the body advertises them; aspect is the res byte). A tap stays on that
 pair until the body reports it. Pocket 3 normal Video also has a
-[FORMAT fallback](https://openpocketcine.app/docs/protocol/commands/#pocket-3-format-choices-without-a-capability-table)
+[FORMAT fallback](https://opencapture.org/openpocketcine/docs/protocol/commands/#pocket-3-format-choices-without-a-capability-table)
 when the camera supplies no capability table (16:9 and 1:1; 9:16 stays
 body Lock Portrait unless already reported). Reported choices take priority;
 separate Pocket 3 Slow Motion and Low-Light fallbacks use the accepted pairs in
@@ -333,7 +333,7 @@ only; Pocket 4 is D-Log; Pocket 3 is D-Log M (HLG is HDR); Nano is 8-bit /
 10-bit / D-Log M; Action 6 is Normal 10-bit / D-Log M. Action 6 has no focus
 modes: its APERTURE tile sits where FOCUS is on Pocket, shows the live iris,
 and sets the strategies the camera offers. Action 6 live view is wired from
-the [survey](https://openpocketcine.app/docs/devices/action-6/) and not yet
+the [survey](https://opencapture.org/openpocketcine/docs/devices/action-6/) and not yet
 checked on a camera. Auto ISO ranges start at 50 on Pocket 3 / Pocket 4 and 100
 on Pocket 4 Pro. View Assist **ND** is a small chip on the live picture
 (centered until placed; drag to move). Long-press to
@@ -432,7 +432,7 @@ styling; Wi-Fi uses Settings styling and opens the shared network wizard.
 and Live View's setting controls. Camera, recording and settings tabs have one
 bottom or left edge with a highlighted selection, without tab boxes.
 The
-[Multiview guide](https://openpocketcine.app/docs/guides/multiview-prototype/) describes setup,
+[Multiview guide](https://opencapture.org/openpocketcine/docs/guides/multiview-prototype/) describes setup,
 Android differences and validation limits.
 Platform differences, including Frame.io and MetalFX, are listed in
 [`docs/PARITY.md`](https://github.com/erik-sutton95/OpenPocketCine/blob/main/docs/PARITY.md).

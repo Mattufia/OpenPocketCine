@@ -101,5 +101,5 @@ experimental. Features are listed separately for each platform.
 - D-Log M scene-stop estimates are not calibrated sensor clipping limits.
   Convert log supports D-Log and D-Log2 only.
 
-See the [iOS app guide](https://openpocketcine.app/docs/apps/ios/), [Android app guide](https://openpocketcine.app/docs/apps/android/)
-and [Multiview guide](https://openpocketcine.app/docs/guides/multiview-prototype/) for usage and current limits.
+See the [iOS app guide](https://opencapture.org/openpocketcine/docs/apps/ios/), [Android app guide](https://opencapture.org/openpocketcine/docs/apps/android/)
+and [Multiview guide](https://opencapture.org/openpocketcine/docs/guides/multiview-prototype/) for usage and current limits.

@@ -91,7 +91,7 @@ a single Pocket 4 Pro iPhone session also confirmed preview and recording
 start/stop. Subsequent iPhone checks confirmed simultaneous Pocket 4 Pro, Pocket 3
 and Nano preview and recording. Reduced camera heat or power use has not been measured.
 
-See [BLE provisioning](https://openpocketcine.app/docs/protocol/ble/) for the observed camera commands.
+See [BLE provisioning](https://opencapture.org/openpocketcine/docs/protocol/ble/) for the observed camera commands.
 
 ## Layout and per-camera monitoring
 

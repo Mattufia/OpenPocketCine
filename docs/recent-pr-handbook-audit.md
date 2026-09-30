@@ -268,7 +268,7 @@ obsolete facts in future implementations.
 ## Physical evidence to prioritize before returning Pocket 3
 
 The survey now supplies a substantial part of the original evidence queue.
-The [public reference](https://openpocketcine.app/docs/devices/pocket-3/) and
+The [public reference](https://opencapture.org/openpocketcine/docs/devices/pocket-3/) and
 [result map](pocket3-reference-checklist.md) distinguish completed observations
 from remaining checks; they do not claim an exhaustive sweep or prove OPC parity.
 

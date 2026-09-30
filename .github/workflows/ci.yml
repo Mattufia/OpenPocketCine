@@ -54,9 +54,6 @@ jobs:
       - name: Connection stress harness (offline)
         run: python3 -m unittest discover -s tools/connection-stress -p 'test_*.py'
 
-      - name: Landing-page assets
-        run: ./scripts/check-site.sh
-
       - name: TestFlight notes
         run: |
           ./scripts/ios-release-notes-check.sh
@@ -135,7 +132,7 @@ jobs:
       - name: Link check
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
         with:
-          args: "--no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design --exclude-path site ."
+          args: "--no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design ."
           fail: true
 
       - name: EditorConfig check
@@ -202,8 +199,6 @@ jobs:
               - 'justfile'
               - '.lycheeignore'
               - '.github/workflows/ci.yml'
-              - 'scripts/stage-pages.sh'
-              - '.github/workflows/deploy-pages.yml'
 
   native:
     name: Native Swift/iOS
@@ -276,13 +271,13 @@ jobs:
           cache-dependency-path: handbook/package-lock.json
       - name: Install handbook dependencies
         run: npm --prefix handbook ci
-      - name: Build handbook at /docs/
+      - name: Build handbook at /openpocketcine/docs/
         env:
           ASTRO_TELEMETRY_DISABLED: "1"
-          HANDBOOK_BASE: /docs
+          HANDBOOK_BASE: /openpocketcine/docs
         run: |
           npm --prefix handbook run build
-          python3 scripts/check-handbook-links.py --base /docs
+          python3 scripts/check-handbook-links.py --base /openpocketcine/docs
 
   gate:
     name: CI gate
