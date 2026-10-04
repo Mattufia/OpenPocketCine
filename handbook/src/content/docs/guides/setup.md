@@ -104,9 +104,10 @@ just handbook         # http://127.0.0.1:4321/
 just handbook-build   # production build
 ```
 
-GitHub Pages merges the landing site and this handbook at
-[openpocketcine.app/docs](https://openpocketcine.app/docs/) when `handbook/` or
-`site/` changes on `main`.
+The handbook deploys to
+[opencapture.org/openpocketcine/docs](https://opencapture.org/openpocketcine/docs/) through a
+Vercel deploy hook when `handbook/` changes on `main`. The rest of the website
+lives in the private repo `erik-sutton95/opencapture-site`.
 
 ## Frame.io (optional)
 

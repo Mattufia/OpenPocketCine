@@ -2,7 +2,7 @@
 
 Human-readable protocol handbook (BLE, camera Wi-Fi, DUML) lives in
 [`handbook/src/content/docs/`](../handbook/src/content/docs/). Read it at
-[openpocketcine.app/docs](https://openpocketcine.app/docs/). Preview locally
+[opencapture.org/openpocketcine/docs](https://opencapture.org/openpocketcine/docs/). Preview locally
 with `just handbook` (http://localhost:4321/).
 
 OpenPocketCine is not affiliated with DJI. No DJI SDK or confidential spec is in
@@ -34,7 +34,7 @@ the effect of a second client handshake remains untested.
 | Phone-as-encoder watcher relay | **iOS:** host re-encodes identity HEVC, Bonjour `_opc-mon._tcp` on shared camera Wi-Fi (peer-to-peer disabled). Watchers join SoftAP but only connect to the host relay; they never open a camera datalink or send `0x09/0xa8`. Android Sharing stays parked. |
 | Keep 1:1 | **Yes** — one phone talks to one Pocket |
 
-Public summary: [live view](https://openpocketcine.app/docs/protocol/live-view/).
+Public summary: [live view](https://opencapture.org/openpocketcine/docs/protocol/live-view/).
 5-tuple and ACK: [`live-session.md`](live-session.md).
 
 ### Capture evidence

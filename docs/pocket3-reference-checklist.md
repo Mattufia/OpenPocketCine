@@ -5,7 +5,7 @@ This is a dated evidence map, not a completed certification matrix or an
 OpenPocketCine support claim. The physical survey used Pocket 3 firmware
 **V01.06.1004** and **DJI Mimo 2.11.9 (298019) on iOS**.
 
-The [public Pocket 3 reference](https://openpocketcine.app/docs/devices/pocket-3/)
+The [public Pocket 3 reference](https://opencapture.org/openpocketcine/docs/devices/pocket-3/)
 is the home for sanitized observations, command/status mappings and inspected
 file properties. Its [source](../handbook/src/content/docs/devices/pocket-3/index.md)
 is updated in this worktree; that does not itself establish publication.

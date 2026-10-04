@@ -126,7 +126,7 @@ until you leave the camera Wi-Fi. Turning it off clears pending automatic
 uploads; locally saved reports remain available through **Share Diagnostics**.
 An Off-only row means this build has no automatic reporting destination.
 You can use every camera feature without opting in. **Reporting Privacy** opens
-the [privacy policy](https://openpocketcine.app/privacy/) with retention and rights
+the [privacy policy](https://opencapture.org/openpocketcine/privacy/) with retention and rights
 information. Turning reporting off does not delete reports already received.
 Contact [OpenCapture support](mailto:support@openpocketcine.app) privately for
 access or deletion requests; never post personal details or reports publicly.

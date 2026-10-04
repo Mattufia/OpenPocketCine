@@ -118,7 +118,7 @@ normal Video mode, without livestream preparation, RTMP configuration, or RTMP
 start. The experimental iOS Multiview screen implements this station path.
 Subsequent iPhone checks confirmed simultaneous Pocket 4 Pro, Pocket 3 and Nano
 preview and recording start/stop. See the
-[Multiview guide](https://openpocketcine.app/docs/guides/multiview-prototype/) for the current limits.
+[Multiview guide](https://opencapture.org/openpocketcine/docs/guides/multiview-prototype/) for the current limits.
 
 After selecting normal Video mode and completing BLE pairing:
 

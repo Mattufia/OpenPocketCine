@@ -87,6 +87,8 @@ fun LiveAssistLayer(
     showTapFocusBox: Boolean = true,
     /** AE lock: the focus box turns yellow with an `AE-L` tag. */
     aeLocked: Boolean = false,
+    /** Long-press lock on the tap-focus box: a lock tag at its lower corner. */
+    focusLocked: Boolean = false,
     /** Picture well in the same space as [modifier]; defaults to the layer box. */
     feedFrame: ChromeRect? = null,
     /** Recorded image within the source raster, excluding camera-added padding. AF keeps [feedFrame]. */
@@ -178,6 +180,7 @@ fun LiveAssistLayer(
                     flippedVertically = pictureFlippedVertically,
                     showTapFocusBox = showTapFocusBox && focus != null,
                     aeLocked = aeLocked,
+                    focusLocked = focusLocked,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -424,15 +427,16 @@ private fun FocusBox(nx: Float, ny: Float) {
 @Composable
 internal fun FalseColorReferenceRuler(state: LiveAssistState, colorMode: Int, modifier: Modifier = Modifier) {
     val transfer = MonitorTransfer.fromColorMode(colorMode)
-    val segments = FalseColorReference.segments(state.falseColorScale, transfer)
+    val rec709 = state.falseColorRec709
+    val segments = FalseColorReference.segments(state.falseColorScale, transfer, rec709)
     val markers =
-        if (state.falseColorScale == FalseColorScale.EL_ZONE) {
-            FalseColorReference.elZoneAxisMarkers()
+        if (state.falseColorScale.usesSceneStops) {
+            FalseColorReference.sceneStopMarkers(transfer, rec709)
         } else {
             emptyList()
         }
     val axis = FalseColorReference.axisLabels(state.falseColorScale)
-    val curve = FalseColorReference.curveKeyLabel(colorMode)
+    val curve = FalseColorReference.curveKeyLabel(colorMode, rec709)
     Box(
         modifier
             .size(ScopePanelSize.falseColorReference.width.dp, ScopePanelSize.falseColorReference.height.dp)

@@ -7,8 +7,8 @@ This reference records a physical Osmo Pocket 3 survey on **11 September 2026**,
 using **DJI Mimo 2.11.9 (298019) on iOS**. The camera's About screen reported
 **V01.06.1004**. These findings describe that camera and app combination;
 OpenPocketCine support is documented separately in the
-[iOS](https://openpocketcine.app/docs/apps/ios/)
-and [Android](https://openpocketcine.app/docs/apps/android/) pages.
+[iOS](https://opencapture.org/openpocketcine/docs/apps/ios/)
+and [Android](https://opencapture.org/openpocketcine/docs/apps/android/) pages.
 
 The camera firmware corresponds to DJI's **v01.06.10.04** release notation.
 Firmware additions can change the menu and protocol behavior, so retain this

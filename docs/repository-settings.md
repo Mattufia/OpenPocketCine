@@ -49,8 +49,11 @@ SDK with `scripts/ci-install-swift-android.sh` — do not switch back to
 `skiptools/swift-android-action`; that composite references `actions/cache@v5`
 and `reactivecircus/android-emulator-runner@v2`, which SHA pinning rejects.
 
-The Pages workflow deploys `site/` (landing) plus the Starlight handbook at
-`/docs/`. Engineering notes in `docs/` are never uploaded. The PR labeler
+The handbook source stays in `handbook/` here and deploys to
+<https://opencapture.org/openpocketcine/docs/> via a Vercel deploy hook on
+merge (`.github/workflows/handbook-deploy.yml`, secret `VERCEL_DEPLOY_HOOK`).
+The rest of the website lives in the private repo
+`erik-sutton95/opencapture-site`. The PR labeler
 uses `pull_request_target` and does **not** check out pull-request code.
 
 ## Security

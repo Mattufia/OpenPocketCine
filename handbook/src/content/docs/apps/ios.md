@@ -269,13 +269,19 @@ space after rotation or resizing, including saved positions. Long-press a View A
 - Bluetooth pairing, camera Wi-Fi join, saved cameras, reconnect
 - HEVC live view on Pocket 4 / 4 Pro; AVC observed on Pocket 3 and Osmo Nano.
   Osmo Action 6 AVC live view is wired from the
-  [Action 6 survey](https://openpocketcine.app/docs/devices/action-6/) and is
+  [Action 6 survey](https://opencapture.org/openpocketcine/docs/devices/action-6/) and is
   not yet checked on a camera.
 - Scopes, exposure/focus assists, framing tools, customizable DISP chrome.
-  False color Scale is CineStop / EL Zone / IRE / Limits. CineStop is
-  video-level IRE stripes over grayscale. EL Zone is 15 contiguous stops
-  from 18% gray (+6 white, −6 black). IRE is six video-level zones over
-  grayscale (crush, near-black, 18% gray, +1 stop, near clip, clip).
+  False color Scale is CineStop / Video / IRE / Limits. CineStop paints five
+  stops around 18% gray, the same on every camera because it
+  reads each log curve in real stops: dark green −2, yellow-green −1, gray
+  at 18%, light pink +1 (skin) and soft yellow +2 (upper skin limit). Red is
+  clipped and violet is crushed; other shadows are flat dark gray and other
+  highlights flat light gray. Video is
+  video-level IRE stripes over grayscale. IRE is six video-level zones over
+  grayscale (crush, near-black, 18% gray, +1 stop, near clip, clip). Read
+  picks LOG (the raw signal, like WAVE, the default) or 709 (the camera's
+  Rec.709 look) for every scale.
   Long-press options lift above the keyboard so number fields (Zebra
   Highlight / Midtone) stay visible; Done dismisses the number pad.
   Long-press LUT: DJI / Creative / Custom. DJI Auto uses the official Rec.709
@@ -296,16 +302,16 @@ space after rotation or resizing, including saved positions. Long-press a View A
   with 4K max 2×). Nano is a fixed 1× lens: no zoom chip, pinch, disc or
   controller zoom, and no gimbal stick or tap focus. Pocket 3's ceiling is per-FORMAT, not one
   generic 4×: **1080 4×, 2.7K 3×, 2160 1:1 3×, 4K 2×, 3K 1:1 2×**
-  ([survey](https://openpocketcine.app/docs/devices/pocket-3/controls/#zoom-and-med-tele)).
+  ([survey](https://opencapture.org/openpocketcine/docs/devices/pocket-3/controls/#zoom-and-med-tele)).
   Zoom must not drop the live picture. FORMAT lists
   `camcap_video_format` pairs (2.7K / 4:3 / 1:1 / 9:16 when the body
   advertises them; aspect is the res byte). A tap stays on that pair until
   the body reports it. Pocket 3 normal Video also has a
-  [documented fallback](https://openpocketcine.app/docs/protocol/commands/#pocket-3-format-choices-without-a-capability-table)
+  [documented fallback](https://opencapture.org/openpocketcine/docs/protocol/commands/#pocket-3-format-choices-without-a-capability-table)
   when the camera supplies no capability table (16:9 and 1:1; 9:16 stays
   body Lock Portrait unless already reported); reported choices take priority.
   Physical iPhone build 99 passed one 2.7K/25 D-Log M record and warm reconnect
-  ([survey evidence](https://openpocketcine.app/docs/devices/pocket-3/connection/#openpocketcine-recording-and-warm-reconnect)).
+  ([survey evidence](https://opencapture.org/openpocketcine/docs/devices/pocket-3/connection/#openpocketcine-recording-and-warm-reconnect)).
   The full matrix, camera cold boot and other shooting modes remain unqualified.
   COLOR follows the body: D-Log2 is Pocket 4 Pro only; Pocket 4 is D-Log;
   Pocket 3 is D-Log M (HLG is HDR); Nano is 8-bit / 10-bit / D-Log M;
@@ -450,7 +456,7 @@ physically checked on each model.
 Wi-Fi. From **Your cameras**, tap the grid icon to set up the network and add
 cameras. Each camera has its own preview and recording controls; Record all
 requests recording together without frame-accurate synchronization. See the
-[Multiview guide](https://openpocketcine.app/docs/guides/multiview-prototype/) for supported observations,
+[Multiview guide](https://opencapture.org/openpocketcine/docs/guides/multiview-prototype/) for supported observations,
 session network selection, saved preferences and remaining physical checks. Pocket 3, Pocket 4 Pro and
 Nano preview and recording have been checked together on iPhone. Pocket 3
 recovery after an app switch required a full rejoin and roughly a minute in the
@@ -594,8 +600,8 @@ the picture during the transition.
 
 D-Log M uses a direct 0–100 preview-signal scale for waveform, parade, histogram
 and zebras, without the D-Log black-point or ISO ceiling. Low/high signal warnings
-do not establish where the camera sensor loses detail. EL Zone (`DLM ≈`) and the
-gray guide use an estimated Pocket 3 curve; use IRE for signal measurements,
+do not establish where the camera sensor loses detail. The false color
+reference (`DLM ≈`), CineStop stops and gray guide use an estimated Pocket 3 curve; use IRE for signal measurements,
 especially on other D-Log M cameras. Live-preview calibration remains pending.
 
 ND recommendations also derive stops from that estimated curve. Treat D-Log M

@@ -227,8 +227,12 @@ final class LiveAssistState {
     var gridDiagonal = false
     var peakingColor: PeakingPaint = .red
     var peakingSensitivity: PeakingSense = .medium
-    var falseColorScale: FalseColorScaleKind = .stops
+    var falseColorScale: FalseColorScaleKind = .sceneStops
     var falseColorReference = true
+    /// Video / IRE read log through the official Rec.709 look (709) or the signal (LOG).
+    var falseColorRec709 = false {
+        didSet { FalseColorLogReading.set(rec709: falseColorRec709) }
+    }
     var zebraHighlight = true
     var zebraMidtone = true
     var zebraHighlightIRE: Double = LiveZebra.highlightIRE
@@ -333,6 +337,7 @@ final class LiveAssistState {
             peakingColor: peakingColor,
             peakingSensitivity: peakingSensitivity,
             falseColorScale: falseColorScale,
+            falseColorRec709: falseColorRec709,
             zebraHighlight: zebraHighlight,
             zebraMidtone: zebraMidtone,
             zebraHighlightIRE: zebraHighlightIRE,
@@ -1172,6 +1177,8 @@ enum OperatorPrefs {
         var peakingSensitivity: String
         var falseColorScale: String
         var falseColorReference: Bool
+        /// Optional so settings saved before the LOG / 709 choice still decode.
+        var falseColorRec709: Bool?
         var zebraHighlight: Bool
         var zebraMidtone: Bool
         var zebraHighlightIRE: Double
@@ -1203,6 +1210,7 @@ enum OperatorPrefs {
             peakingSensitivity = s.peakingSensitivity.rawValue
             falseColorScale = s.falseColorScale.rawValue
             falseColorReference = s.falseColorReference
+            falseColorRec709 = s.falseColorRec709
             zebraHighlight = s.zebraHighlight
             zebraMidtone = s.zebraMidtone
             zebraHighlightIRE = s.zebraHighlightIRE
@@ -1252,8 +1260,9 @@ enum OperatorPrefs {
             s.gridDiagonal = gridDiagonal
             s.peakingColor = PeakingPaint(rawValue: peakingColor) ?? .red
             s.peakingSensitivity = PeakingSense(rawValue: peakingSensitivity) ?? .medium
-            s.falseColorScale = FalseColorScaleKind(rawValue: falseColorScale) ?? .stops
+            s.falseColorScale = FalseColorScaleKind(rawValue: falseColorScale) ?? .sceneStops
             s.falseColorReference = falseColorReference
+            s.falseColorRec709 = falseColorRec709 ?? false
             s.zebraHighlight = zebraHighlight
             s.zebraMidtone = zebraMidtone
             s.zebraHighlightIRE = zebraHighlightIRE
@@ -1294,6 +1303,8 @@ struct FeedAlignedAssists: View {
     var showTapFocusBox = true
     /// AE lock: the focus / metering box turns yellow with an `AE-L` tag.
     var aeLocked = false
+    /// Long-press lock on the tap-focus box: a lock tag at its lower corner.
+    var focusLocked = false
     /// When set (letterboxed clip playback), framing overlays align to this rect
     /// instead of the full geometry — OpenZCine `FeedAlignedAssists(feed:)`.
     var feed: CGRect? = nil
@@ -1376,7 +1387,8 @@ struct FeedAlignedAssists: View {
                             FocusBoxView(
                                 feed: focusFeed,
                                 normalized: shownFocus,
-                                aeLocked: aeLocked
+                                aeLocked: aeLocked,
+                                focusLocked: focusLocked
                             )
                         }
                     }
@@ -1535,9 +1547,10 @@ private struct FocusBoxView: View {
     let feed: CGRect
     let normalized: CGPoint
     var aeLocked = false
+    var focusLocked = false
 
     var body: some View {
-        let side = min(feed.width, feed.height) * 0.14
+        let side = min(feed.width, feed.height) * LiveFeedFocusGesture.focusBoxSideFraction
         let rect = CGRect(x: 0, y: 0, width: side, height: side)
         let x = feed.minX + normalized.x * feed.width
         let y = feed.minY + normalized.y * feed.height
@@ -1560,6 +1573,14 @@ private struct FocusBoxView: View {
                     .fixedSize()
                     .position(
                         x: tagLeading ? x - side / 2 - 14 : x + side / 2 + 14, y: y - side / 2 + 6)
+            }
+            if focusLocked {
+                OpcIcon.lock
+                    .frame(width: 10, height: 10)
+                    .foregroundStyle(aeLocked ? LiveDesign.aeLock : LiveDesign.accent)
+                    .shadow(color: .black.opacity(0.8), radius: 1.5, y: 0.5)
+                    .position(
+                        x: tagLeading ? x - side / 2 - 10 : x + side / 2 + 10, y: y + side / 2 - 6)
             }
         }
         .allowsHitTesting(false)
