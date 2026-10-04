@@ -19,7 +19,6 @@ primarily **Osmo Pocket 4 / 4 Pro**, with Nano live view on AVC.
 | `Sources/OpenPocketCineAndroidFacade/` | Android JNI facade |
 | `docs/` | Engineering references |
 | `handbook/src/content/docs/` | Public docs site (apps, protocol, setup) |
-| `site/` | GitHub Pages landing |
 | `.github/` | CI and templates |
 
 `captures/` is gitignored.
@@ -29,6 +28,7 @@ primarily **Osmo Pocket 4 / 4 Pro**, with Nano live view on AVC.
 - Keep the Swift core **portable**: Foundation-only protocol and business logic.
 - Live view is **enable-once**: `0x09/0xa8` starts the stream and is the only PLI. After picture, further enables follow the **watchdog** only.
 - **Hygiene:** secrets, camera Wi-Fi passwords, PII, unofficial LUT dumps, and `captures/`, `Osmo LUTS/`, `vendor/`, `ref/`, `.local/` stay out of git. Official Rec.709 cubes under `ios/OpenPocketCine/Resources/` and `Apps/Android/app/src/main/assets/luts/` are tracked.
+- **After every merge into `main` that changes the app, publish a new GitHub sideload APK release** (versionCode bump, release build, `gh release`): [`docs/RELEASE.md` → Sideload APK](docs/RELEASE.md#sideload-apk).
 - Work on a branch (`feat/`, `fix/`, `docs/`, …) and open a PR into `main`. Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `build:`, `test:`). Tags and version trains: [`docs/RELEASE.md`](docs/RELEASE.md).
 - `AGENTS.md` is canonical for every agent. Client stubs (`CLAUDE.md`, `CODEX.md`, `GROK.md`) are pointers only — do not copy these rules into a second instruction file. Do not add Cursor, Copilot, Gemini, or Windsurf instruction dumps.
 
@@ -50,7 +50,7 @@ primarily **Osmo Pocket 4 / 4 Pro**, with Nano live view on AVC.
 - **watchdog** — stall, GOP-reset grace, recover `0x09/0xa8`: [`docs/feed-watchdog.md`](docs/feed-watchdog.md)
 - **reliability** — freeze-in-seconds, ACK windows, repair owner: [`docs/connection-reliability.md`](docs/connection-reliability.md)
 - **protocol** — DUML, BLE, opcode, pktType, HEVC/AVC payload: `handbook/src/content/docs/protocol/`
-- **handbook** — public docs at openpocketcine.app/docs, setup, iOS/Android app pages: `handbook/src/content/docs/`
+- **handbook** — public docs at opencapture.org/openpocketcine/docs, setup, iOS/Android app pages: `handbook/src/content/docs/`
 - **hygiene** — commit/PR that might touch secrets, LUTs, captures, identity: [`docs/commit-hygiene.md`](docs/commit-hygiene.md)
 - **contributing** — issues vs discussions, labels, human setup: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **budget** — smoothness, fps, jank, HUD Hz, scope tap, ACK rate, thermal: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)

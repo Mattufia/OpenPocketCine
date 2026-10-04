@@ -12,9 +12,9 @@ engineering. By participating you agree to our [Code of Conduct](CODE_OF_CONDUCT
 
 No vendor SDK is included or required — the camera protocol is reverse-engineered from public
 behavior. Public docs (protocol, apps, setup):
-[openpocketcine.app/docs](https://openpocketcine.app/docs/) (`just handbook` locally).
+[opencapture.org/openpocketcine/docs](https://opencapture.org/openpocketcine/docs/) (`just handbook` locally).
 Keep those pages current in the same PR — see
-[Keeping docs current](https://openpocketcine.app/docs/contribute/documentation/).
+[Keeping docs current](https://opencapture.org/openpocketcine/docs/contribute/documentation/).
 
 **Hygiene** (secrets, captures, unofficial LUTs): [`docs/commit-hygiene.md`](docs/commit-hygiene.md)
 and [`AGENTS.md`](AGENTS.md). Official Rec.709 cubes in
@@ -84,7 +84,7 @@ GitHub-specific:
   issues are strictly for bugs. Never put sensitive information (camera Wi-Fi passwords,
   captures, credentials) in an issue.
 - **Protocol questions** — Read the
-  [protocol handbook](https://openpocketcine.app/docs/) first, then ask in
+  [protocol handbook](https://opencapture.org/openpocketcine/docs/) first, then ask in
   [Q&A](https://github.com/erik-sutton95/OpenPocketCine/discussions/new?category=q-a).
 - **Feature ideas, enhancements & discussions** — Use **GitHub Discussions**. Start a new
   discussion in the

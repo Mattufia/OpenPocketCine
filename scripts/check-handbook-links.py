@@ -26,10 +26,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="/")
     parser.add_argument("--dist", type=Path, default=Path("handbook/dist"))
-    parser.add_argument("--site", type=Path, default=Path("site"))
     args = parser.parse_args()
     base = "/" + args.base.strip("/") + "/" if args.base.strip("/") else "/"
-    origin = "https://openpocketcine.app"
+    origin = "https://opencapture.org"
+    production = "/openpocketcine/docs/"
     pages = {}
     for path in args.dist.rglob("*.html"):
         route = base + path.relative_to(args.dist).as_posix().removesuffix("index.html")
@@ -40,12 +40,12 @@ def main():
     for route, page in pages.items():
         for href in page.links:
             target = urlsplit(urljoin(origin + route, href))
-            if target.scheme not in ("http", "https") or target.netloc != "openpocketcine.app":
+            if target.scheme not in ("http", "https") or target.netloc != "opencapture.org":
                 continue
             destination = unquote(target.path)
             # Canonical production URLs also resolve during a root preview build.
-            if base != "/docs/" and destination.startswith("/docs/"):
-                destination = base + destination.removeprefix("/docs/")
+            if base != production and destination.startswith(production):
+                destination = base + destination.removeprefix(production)
             page_route = destination.removesuffix("index.html")
             if page_route in pages:
                 if target.fragment and unquote(target.fragment) not in pages[page_route].ids:
@@ -54,16 +54,10 @@ def main():
             candidate = args.dist / destination.removeprefix(base)
             if destination.startswith(base) and candidate.is_file():
                 continue
-            # Links outside the handbook must resolve in the landing-page tree.
-            landing = args.site / destination.lstrip("/")
-            if landing.is_dir():
-                landing = landing / "index.html"
-            if not landing.is_file():
+            # ponytail: website pages outside the handbook live in the private
+            # opencapture-site repo, so only handbook routes are checked here.
+            if destination.startswith(base):
                 errors.add((route, href, "missing route"))
-            elif target.fragment and landing.suffix == ".html":
-                document = Page(landing.read_text(encoding="utf-8"))
-                if unquote(target.fragment) not in document.ids:
-                    errors.add((route, href, "missing anchor"))
     for route, href, reason in sorted(errors):
         print(f"{route}: {href}: {reason}")
     print(f"Handbook links: {len(pages)} pages, {len(errors)} errors")

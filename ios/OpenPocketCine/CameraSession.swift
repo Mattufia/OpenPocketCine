@@ -274,6 +274,7 @@ final class CameraSession {
         cancelNativeHeadTrack()
         restGimbalStickWire()
         prepHeadTrackGimbal()
+        noteGimbalAppMotion()
         nativeTargetGeneration &+= 1
         nativeHeadToken = nativeTargetGeneration
         datalink.beginNativeTargets(token: nativeTargetGeneration)
@@ -652,6 +653,8 @@ final class CameraSession {
         hasVideoFormat = decoder.hasFormat
         isFeedWarming = decoder.lastPresentedAt == nil
     }
+    /// Hand the pose back to the tile so a Live View pan or TT180 survives close.
+    var multiviewPose: GimbalStickMapping { gimbalStickMapping }
     func adoptMultiviewPose(_ pose: GimbalStickMapping) {
         guard isMultiviewBorrowed, !isMultiviewControlsOnly else { return }
         gimbalStickMapping = pose
@@ -3115,6 +3118,7 @@ final class CameraSession {
         if axes.axis0 != GimbalStick.center || axes.axis1 != GimbalStick.center {
             movePoseStableSince = nil
             lastGimbalThrowAt = Date()
+            noteGimbalAppMotion()
         }
         if !gimbalStickHeld {
             gimbalStickHeld = true
@@ -6458,6 +6462,17 @@ final class CameraSession {
         decoder.invalidatePictureFlipPresentation()
         decoder.poseViewFlip = false
         syncGimbalPose()
+    }
+
+    /// Our own pan must never read as a reconnect-at-180 seed.
+    private func noteGimbalAppMotion() {
+        guard !gimbalStickMapping.poseSeeded else { return }
+        gimbalStickMapping.noteAppMotion()
+        if gimbalStickMapping.poseSeeded {
+            ControlLiveLog.line(
+                "control: gimbal seed front by app motion yaw=\(gimbalStickMapping.yawTenthDeg.map { String($0) } ?? "-")"
+            )
+        }
     }
 
     private func syncGimbalPose() {
